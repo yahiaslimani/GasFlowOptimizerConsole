@@ -1,4 +1,5 @@
-modules = ["csharp", "dotnet-8"]
+modules = ["dotnet-7.0", "web"]
+run = "dotnet run"
 [agent]
 expertMode = true
 
@@ -22,9 +23,12 @@ args = "Gas Pipeline Optimization"
 name = "Gas Pipeline Optimization"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "dotnet restore && dotnet run"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "dotnet run"
+
+[deployment]
+run = ["sh", "-c", "dotnet run"]

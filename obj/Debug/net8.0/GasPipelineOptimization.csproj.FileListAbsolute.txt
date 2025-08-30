@@ -25,3 +25,4 @@
 /home/runner/workspace/obj/Debug/net8.0/GasPipelineOptimization.pdb
 /home/runner/workspace/obj/Debug/net8.0/GasPipelineOptimization.genruntimeconfig.cache
 /home/runner/workspace/obj/Debug/net8.0/ref/GasPipelineOptimization.dll
+/home/runner/workspace/obj/Debug/net8.0/GasPipelineOptimization.sourcelink.json
