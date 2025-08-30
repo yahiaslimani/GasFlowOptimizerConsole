@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("GasPipelineOptimization")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4e7f12288c0deb968b1da7d0d494a4e0b0dbf892")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1e32d370289c8e8f6c22d0d16c5aa58e6112015b")]
 [assembly: System.Reflection.AssemblyProductAttribute("GasPipelineOptimization")]
 [assembly: System.Reflection.AssemblyTitleAttribute("GasPipelineOptimization")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

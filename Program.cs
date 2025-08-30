@@ -93,6 +93,7 @@ namespace GasPipelineOptimization
                 Console.WriteLine("4. Network Information");
                 Console.WriteLine("5. Settings Configuration");
                 Console.WriteLine("6. Export Results");
+                Console.WriteLine("7. Flow Analysis & Validation");
                 Console.WriteLine("0. Exit");
                 Console.Write("Select option: ");
 
@@ -117,6 +118,9 @@ namespace GasPipelineOptimization
                         break;
                     case "6":
                         await ExportResults(engine, network);
+                        break;
+                    case "7":
+                        await RunFlowAnalysis(network);
                         break;
                     case "0":
                         Console.WriteLine("Goodbye!");
@@ -527,6 +531,181 @@ namespace GasPipelineOptimization
             }
             
             return scenario;
+        }
+
+        static async Task RunFlowAnalysis(PipelineNetwork network)
+        {
+            Console.WriteLine("\n=== Gas Flow Analysis & Validation ===");
+            Console.WriteLine("Analyzing gas flow from delivery points upstream...");
+            
+            var flowService = new FlowCalculationService();
+            
+            try
+            {
+                // Calculate upstream flows
+                var result = flowService.CalculateUpstreamFlow(network);
+                
+                // Display summary
+                Console.WriteLine($"\nAnalysis Status: {result.CalculationStatus}");
+                Console.WriteLine($"Network Feasible: {(result.IsNetworkFeasible ? "✓ YES" : "✗ NO")}");
+                Console.WriteLine();
+                
+                // Show key metrics
+                Console.WriteLine("=== Key Metrics ===");
+                Console.WriteLine($"Total Demand: {result.NetworkMetrics.TotalDemandRequired:F2} MMscfd");
+                Console.WriteLine($"Total Supply: {result.NetworkMetrics.TotalSupplyAvailable:F2} MMscfd");
+                Console.WriteLine($"Supply-Demand Balance: {result.NetworkMetrics.SupplyDemandBalance:F2} MMscfd");
+                Console.WriteLine($"Average Utilization: {result.NetworkMetrics.AverageUtilization:F1}%");
+                Console.WriteLine($"Peak Utilization: {result.NetworkMetrics.PeakUtilization:F1}%");
+                Console.WriteLine($"Segments Over Capacity: {result.NetworkMetrics.SegmentsOverCapacity} of {result.NetworkMetrics.TotalSegments}");
+                Console.WriteLine();
+                
+                // Show capacity violations if any
+                if (result.ValidationIssues.Any())
+                {
+                    Console.WriteLine("=== CAPACITY VIOLATIONS DETECTED ===");
+                    foreach (var issue in result.ValidationIssues)
+                    {
+                        Console.WriteLine($"⚠ {issue}");
+                    }
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.WriteLine("✓ All segments are within capacity limits");
+                    Console.WriteLine();
+                }
+                
+                // Show top utilized segments
+                var topSegments = result.SegmentAnalysis.Values
+                    .OrderByDescending(s => s.UtilizationPercentage)
+                    .Take(5)
+                    .ToList();
+                
+                if (topSegments.Any())
+                {
+                    Console.WriteLine("=== Top 5 Most Utilized Segments ===");
+                    Console.WriteLine("Segment".PadRight(12) + "Flow".PadRight(10) + "Capacity".PadRight(10) + "Utilization".PadRight(12) + "Status");
+                    Console.WriteLine(new string('-', 50));
+                    
+                    foreach (var segment in topSegments)
+                    {
+                        var id = segment.SegmentId.PadRight(12);
+                        var flow = segment.RequiredFlow.ToString("F1").PadRight(10);
+                        var capacity = segment.Capacity.ToString("F1").PadRight(10);
+                        var utilization = $"{segment.UtilizationPercentage:F1}%".PadRight(12);
+                        var status = segment.IsOverCapacity ? "OVER CAP" : "OK";
+                        
+                        Console.WriteLine($"{id}{flow}{capacity}{utilization}{status}");
+                    }
+                    Console.WriteLine();
+                }
+                
+                // Interactive options
+                Console.WriteLine("=== Analysis Options ===");
+                Console.WriteLine("1. View Detailed Report");
+                Console.WriteLine("2. Export Analysis to File");
+                Console.WriteLine("3. Analyze Specific Segment");
+                Console.WriteLine("0. Return to Main Menu");
+                Console.Write("Select option: ");
+                
+                var choice = ReadLineWithDefault("0");
+                
+                switch (choice)
+                {
+                    case "1":
+                        Console.WriteLine("\n" + flowService.GenerateFlowReport(result));
+                        break;
+                    case "2":
+                        await ExportFlowAnalysis(flowService, result);
+                        break;
+                    case "3":
+                        await AnalyzeSpecificSegment(network, result);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during flow analysis: {ex.Message}");
+            }
+            
+            Console.WriteLine("\nPress any key to continue...");
+            try
+            {
+                Console.ReadKey();
+            }
+            catch (InvalidOperationException)
+            {
+                // Handle automation environments
+                Console.WriteLine("Flow analysis completed.");
+            }
+        }
+        
+        static async Task ExportFlowAnalysis(FlowCalculationService flowService, FlowCalculationResult result)
+        {
+            try
+            {
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                var filename = $"flow_analysis_{timestamp}.txt";
+                
+                var report = flowService.GenerateFlowReport(result);
+                await File.WriteAllTextAsync(filename, report);
+                
+                Console.WriteLine($"Flow analysis exported to: {filename}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Export failed: {ex.Message}");
+            }
+        }
+        
+        static async Task AnalyzeSpecificSegment(PipelineNetwork network, FlowCalculationResult result)
+        {
+            Console.WriteLine("\nAvailable segments:");
+            var segments = result.SegmentAnalysis.Values.OrderBy(s => s.SegmentId).ToList();
+            
+            for (int i = 0; i < segments.Count; i++)
+            {
+                var segment = segments[i];
+                var status = segment.IsOverCapacity ? " [OVER CAPACITY]" : "";
+                Console.WriteLine($"{i + 1}. {segment.SegmentId} - {segment.SegmentName}{status}");
+            }
+            
+            Console.Write($"Select segment (1-{segments.Count}): ");
+            if (int.TryParse(ReadLineWithDefault("1"), out int segmentIndex) && 
+                segmentIndex > 0 && segmentIndex <= segments.Count)
+            {
+                var selectedSegment = segments[segmentIndex - 1];
+                var networkSegment = network.Segments[selectedSegment.SegmentId];
+                
+                Console.WriteLine($"\n=== Detailed Analysis: {selectedSegment.SegmentId} ===");
+                Console.WriteLine($"Name: {selectedSegment.SegmentName}");
+                Console.WriteLine($"Route: {selectedSegment.FromPointId} → {selectedSegment.ToPointId}");
+                Console.WriteLine($"Required Flow: {selectedSegment.RequiredFlow:F2} MMscfd");
+                Console.WriteLine($"Capacity: {selectedSegment.Capacity:F2} MMscfd");
+                Console.WriteLine($"Utilization: {selectedSegment.UtilizationPercentage:F1}%");
+                Console.WriteLine($"Length: {networkSegment.Length:F1} miles");
+                Console.WriteLine($"Diameter: {networkSegment.Diameter:F0} inches");
+                Console.WriteLine($"Transport Cost: ${networkSegment.TransportationCost:F3}/MMscf");
+                
+                if (selectedSegment.IsOverCapacity)
+                {
+                    Console.WriteLine($"⚠ CAPACITY EXCEEDED by {selectedSegment.ExcessFlow:F2} MMscfd");
+                    Console.WriteLine("Recommendations:");
+                    Console.WriteLine("- Consider capacity expansion");
+                    Console.WriteLine("- Evaluate alternative routing");
+                    Console.WriteLine("- Review demand projections");
+                }
+                else
+                {
+                    var remaining = selectedSegment.Capacity - selectedSegment.RequiredFlow;
+                    Console.WriteLine($"✓ Available capacity: {remaining:F2} MMscfd");
+                }
+            }
+            else
+            {
+                Console.WriteLine("Invalid selection.");
+            }
         }
 
         static string ReadLineWithDefault(string defaultValue)
