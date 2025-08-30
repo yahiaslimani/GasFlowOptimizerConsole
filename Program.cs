@@ -381,16 +381,11 @@ namespace GasPipelineOptimization
             var timeInput = ReadLineWithDefault("300");
             var maxTime = double.TryParse(timeInput, out var parsedTime) ? parsedTime : 300.0;
             
-            Console.Write("Preferred solver (GLOP/SCIP) [GLOP]: ");
-            var solverInput = ReadLineWithDefault("GLOP");
-            var solver = string.IsNullOrEmpty(solverInput) ? "GLOP" : solverInput.ToUpper();
-            
             return new OptimizationSettings
             {
                 EnablePressureConstraints = enablePressure,
                 EnableCompressorStations = enableCompressors,
                 MaxSolutionTimeSeconds = maxTime,
-                PreferredSolver = solver,
                 EnableDetailedLogging = true
             };
         }
