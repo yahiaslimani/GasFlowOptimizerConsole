@@ -8,13 +8,12 @@ namespace GasPipelineOptimization.Services
     public class FlowCalculationService
     {
         /// <summary>
-        /// Calculates flow through each segment from delivery points upstream
+        /// Calculates flow through each segment using trunk line-based approach (like existing project)
         /// </summary>
         public FlowCalculationResult CalculateUpstreamFlow(PipelineNetwork network)
         {
             var result = new FlowCalculationResult();
             var segmentFlows = new Dictionary<string, double>();
-            var visitedPoints = new HashSet<string>();
             var validationIssues = new List<string>();
 
             try
@@ -25,21 +24,20 @@ namespace GasPipelineOptimization.Services
                     segmentFlows[segment.Id] = 0.0;
                 }
 
-                // Step 2: Start from each delivery point and trace upstream
-                foreach (var deliveryPoint in network.GetDeliveryPoints())
+                // Step 2: Process flows using trunk line approach (similar to existing project)
+                var trunkLines = network.GetTrunkLines().OrderBy(t => t.FromPointId).ToList();
+                
+                foreach (var trunkLine in trunkLines)
                 {
-                    if (deliveryPoint.DemandRequirement > 0)
-                    {
-                        TraceUpstreamFlow(network, deliveryPoint.Id, deliveryPoint.DemandRequirement, 
-                                        segmentFlows, new HashSet<string>());
-                    }
+                    var connectedLines = network.GetConnectedLines(trunkLine).ToList();
+                    AddLineFlows(network, trunkLine, connectedLines, segmentFlows);
                 }
 
                 // Step 3: Calculate usage percentages and validate capacity constraints
                 foreach (var segment in network.GetActiveSegments())
                 {
                     var flow = segmentFlows[segment.Id];
-                    var utilizationPercent = (flow / segment.Capacity) * 100.0;
+                    var utilizationPercent = segment.Capacity > 0 ? (flow / segment.Capacity) * 100.0 : 0.0;
                     var isOverCapacity = flow > segment.Capacity;
 
                     var flowResult = new SegmentFlowAnalysis
@@ -83,70 +81,89 @@ namespace GasPipelineOptimization.Services
         }
 
         /// <summary>
-        /// Recursively traces flow upstream from a delivery point
+        /// Adds flow calculations for a trunk line and its connected segments (similar to existing project's AddLineFlows)
         /// </summary>
-        private void TraceUpstreamFlow(PipelineNetwork network, string currentPointId, double requiredFlow,
-                                     Dictionary<string, double> segmentFlows, HashSet<string> visitedInPath)
+        private void AddLineFlows(PipelineNetwork network, Segment trunkLine, List<Segment> connectedLines, 
+                                Dictionary<string, double> segmentFlows)
         {
-            // Prevent infinite loops in case of cycles
-            if (visitedInPath.Contains(currentPointId))
+            // Process each connected line in the trunk line system
+            var processedSegments = new HashSet<string>();
+            
+            // Step 1: Calculate flow requirements for this trunk line system
+            var totalDemandDownstream = CalculateDownstreamDemand(network, trunkLine, processedSegments);
+            
+            // Step 2: Distribute flows through the trunk line and connected segments
+            DistributeFlowsThroughTrunkSystem(network, trunkLine, connectedLines, totalDemandDownstream, segmentFlows);
+        }
+
+        /// <summary>
+        /// Calculates total demand downstream from a trunk line
+        /// </summary>
+        private double CalculateDownstreamDemand(PipelineNetwork network, Segment trunkLine, HashSet<string> processedSegments)
+        {
+            var totalDemand = 0.0;
+            var visited = new HashSet<string>();
+            
+            // Trace downstream from trunk line to find all delivery points
+            TraceDownstreamDemand(network, trunkLine.ToPointId, ref totalDemand, visited);
+            
+            return totalDemand;
+        }
+
+        /// <summary>
+        /// Recursively traces downstream to calculate total demand
+        /// </summary>
+        private void TraceDownstreamDemand(PipelineNetwork network, string pointId, ref double totalDemand, HashSet<string> visited)
+        {
+            if (visited.Contains(pointId)) return;
+            visited.Add(pointId);
+
+            var point = network.Points[pointId];
+            
+            // If this is a delivery point, add its demand
+            if (point.Type == PointType.Delivery && point.IsActive)
             {
-                return;
+                totalDemand += point.DemandRequirement;
             }
 
-            visitedInPath.Add(currentPointId);
-            var currentPoint = network.Points[currentPointId];
-
-            // Get all incoming segments to this point
-            var incomingSegments = network.GetIncomingSegments(currentPointId).ToList();
-
-            if (!incomingSegments.Any())
+            // Continue downstream through outgoing segments
+            foreach (var outgoingSegment in network.GetOutgoingSegments(pointId))
             {
-                // This is likely a receipt point or isolated point
-                visitedInPath.Remove(currentPointId);
-                return;
+                TraceDownstreamDemand(network, outgoingSegment.ToPointId, ref totalDemand, visited);
             }
+        }
 
-            // If this is a receipt point, we don't need to trace further upstream
-            if (currentPoint.Type == PointType.Receipt)
+        /// <summary>
+        /// Distributes flows through the trunk line system based on demands and network topology
+        /// </summary>
+        private void DistributeFlowsThroughTrunkSystem(PipelineNetwork network, Segment trunkLine, 
+                                                      List<Segment> connectedLines, double totalDemand, 
+                                                      Dictionary<string, double> segmentFlows)
+        {
+            // Process trunk line first
+            segmentFlows[trunkLine.Id] += totalDemand;
+            
+            // Process each connected segment
+            foreach (var segment in connectedLines.Where(s => s.Id != trunkLine.Id))
             {
-                // Add the required flow to all incoming segments (though there should be none for receipt points)
-                foreach (var segment in incomingSegments)
-                {
-                    segmentFlows[segment.Id] += requiredFlow;
-                }
-                visitedInPath.Remove(currentPointId);
-                return;
+                // Calculate the demand served by this segment
+                var segmentDemand = CalculateSegmentDemand(network, segment);
+                segmentFlows[segment.Id] += segmentDemand;
             }
+        }
 
-            // For compressor stations and intermediate points, distribute the flow among incoming segments
-            // Simple approach: distribute equally among active incoming segments
-            if (incomingSegments.Count == 1)
-            {
-                // Single upstream path - all flow goes through this segment
-                var segment = incomingSegments.First();
-                segmentFlows[segment.Id] += requiredFlow;
-                
-                // Continue upstream
-                TraceUpstreamFlow(network, segment.FromPointId, requiredFlow, segmentFlows, visitedInPath);
-            }
-            else
-            {
-                // Multiple upstream paths - need to distribute flow
-                // For now, distribute proportionally based on segment capacity
-                var totalUpstreamCapacity = incomingSegments.Sum(s => s.Capacity);
-                
-                foreach (var segment in incomingSegments)
-                {
-                    var proportionalFlow = (segment.Capacity / totalUpstreamCapacity) * requiredFlow;
-                    segmentFlows[segment.Id] += proportionalFlow;
-                    
-                    // Continue upstream with the proportional flow
-                    TraceUpstreamFlow(network, segment.FromPointId, proportionalFlow, segmentFlows, visitedInPath);
-                }
-            }
-
-            visitedInPath.Remove(currentPointId);
+        /// <summary>
+        /// Calculates demand served by a specific segment
+        /// </summary>
+        private double CalculateSegmentDemand(PipelineNetwork network, Segment segment)
+        {
+            var demandServed = 0.0;
+            var visited = new HashSet<string>();
+            
+            // Find all delivery points downstream from this segment
+            TraceDownstreamDemand(network, segment.ToPointId, ref demandServed, visited);
+            
+            return demandServed;
         }
 
         /// <summary>

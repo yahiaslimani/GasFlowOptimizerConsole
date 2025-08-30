@@ -122,6 +122,73 @@ namespace GasPipelineOptimization.Models
         }
 
         /// <summary>
+        /// Gets trunk lines (main transmission lines) - segments with highest capacity or connecting receipt to delivery points
+        /// </summary>
+        public IEnumerable<Segment> GetTrunkLines()
+        {
+            var segments = GetActiveSegments().ToList();
+            if (!segments.Any()) return new List<Segment>();
+
+            // Identify trunk lines as segments that:
+            // 1. Have high capacity (top 30% of capacities)
+            // 2. Connect receipt points to the network
+            // 3. Are main transmission lines (not small distribution lines)
+            
+            var sortedByCapacity = segments.OrderByDescending(s => s.Capacity).ToList();
+            var capacityThreshold = sortedByCapacity.Take(Math.Max(1, sortedByCapacity.Count / 3)).Min(s => s.Capacity);
+            
+            var trunkLines = segments.Where(s => 
+                s.Capacity >= capacityThreshold || // High capacity segments
+                GetReceiptPoints().Any(r => r.Id == s.FromPointId) || // Segments from receipt points
+                s.Name.ToLower().Contains("main") || // Segments with "main" in name
+                s.Name.ToLower().Contains("trunk") || // Segments with "trunk" in name
+                s.Name.ToLower().Contains("transmission") // Segments with "transmission" in name
+            ).ToList();
+
+            return trunkLines.Any() ? trunkLines : segments.Take(1); // Return at least one segment
+        }
+
+        /// <summary>
+        /// Gets connected lines for a trunk line (segments that form a path with the trunk line)
+        /// </summary>
+        public IEnumerable<Segment> GetConnectedLines(Segment trunkLine)
+        {
+            var connectedLines = new List<Segment> { trunkLine };
+            var visited = new HashSet<string> { trunkLine.Id };
+
+            // Find downstream connected segments
+            FindConnectedSegments(trunkLine.ToPointId, connectedLines, visited, true);
+            
+            // Find upstream connected segments  
+            FindConnectedSegments(trunkLine.FromPointId, connectedLines, visited, false);
+
+            return connectedLines;
+        }
+
+        /// <summary>
+        /// Recursively finds connected segments in a direction (downstream or upstream)
+        /// </summary>
+        private void FindConnectedSegments(string pointId, List<Segment> connectedLines, 
+                                         HashSet<string> visited, bool downstream)
+        {
+            var segments = downstream ? 
+                GetOutgoingSegments(pointId).ToList() : 
+                GetIncomingSegments(pointId).ToList();
+
+            foreach (var segment in segments)
+            {
+                if (visited.Contains(segment.Id)) continue;
+                
+                visited.Add(segment.Id);
+                connectedLines.Add(segment);
+
+                // Continue tracing in the same direction
+                var nextPointId = downstream ? segment.ToPointId : segment.FromPointId;
+                FindConnectedSegments(nextPointId, connectedLines, visited, downstream);
+            }
+        }
+
+        /// <summary>
         /// Calculates total supply capacity in the network
         /// </summary>
         public double GetTotalSupplyCapacity()
