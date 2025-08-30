@@ -1,16 +1,9 @@
 {
   "version": 2,
-  "dgSpecHash": "jcyKGmuAEpQ=",
+  "dgSpecHash": "nm0MihpEeKI=",
   "success": true,
   "projectFilePath": "/home/runner/workspace/GasPipelineOptimization.csproj",
   "expectedPackageFiles": [
-    "/home/runner/.nuget/packages/google.ortools/9.8.3296/google.ortools.9.8.3296.nupkg.sha512",
-    "/home/runner/.nuget/packages/google.ortools.runtime.linux-arm64/9.8.3296/google.ortools.runtime.linux-arm64.9.8.3296.nupkg.sha512",
-    "/home/runner/.nuget/packages/google.ortools.runtime.linux-x64/9.8.3296/google.ortools.runtime.linux-x64.9.8.3296.nupkg.sha512",
-    "/home/runner/.nuget/packages/google.ortools.runtime.osx-arm64/9.8.3296/google.ortools.runtime.osx-arm64.9.8.3296.nupkg.sha512",
-    "/home/runner/.nuget/packages/google.ortools.runtime.osx-x64/9.8.3296/google.ortools.runtime.osx-x64.9.8.3296.nupkg.sha512",
-    "/home/runner/.nuget/packages/google.ortools.runtime.win-x64/9.8.3296/google.ortools.runtime.win-x64.9.8.3296.nupkg.sha512",
-    "/home/runner/.nuget/packages/google.protobuf/3.25.0/google.protobuf.3.25.0.nupkg.sha512",
     "/home/runner/.nuget/packages/system.text.json/8.0.5/system.text.json.8.0.5.nupkg.sha512"
   ],
   "logs": []

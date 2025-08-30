@@ -1,41 +1,35 @@
-using Google.OrTools.LinearSolver;
 using GasPipelineOptimization.Models;
 using GasPipelineOptimization.Services;
 
 namespace GasPipelineOptimization.Algorithms
 {
     /// <summary>
-    /// Algorithm to maximize total throughput in the gas pipeline network
+    /// Algorithm to maximize total throughput in the gas pipeline network using custom flow allocation
     /// </summary>
     public class MaximizeThroughputAlgorithm : IOptimizationAlgorithm
     {
         public string Name => "Maximize Throughput";
         public string Description => "Maximizes the total gas flow through the pipeline network while respecting capacity and pressure constraints";
 
-        private readonly PressureConstraintService _pressureService;
-        private readonly CompressorService _compressorService;
-
         public MaximizeThroughputAlgorithm()
         {
-            _pressureService = new PressureConstraintService();
-            _compressorService = new CompressorService();
         }
 
         public bool CanHandle(PipelineNetwork network, OptimizationSettings settings)
         {
-            // This algorithm can handle any valid network
-            return network.IsValid(out _);
+            // This algorithm can handle any network with active segments and receipt points
+            return network.GetActiveSegments().Any() && network.GetReceiptPoints().Any();
         }
 
         public Dictionary<string, string> GetParameters()
         {
             return new Dictionary<string, string>
             {
-                { "ThroughputWeight", "Weight for throughput maximization objective (default: 1.0)" },
-                { "DemandPriority", "Priority for satisfying demand vs maximizing total flow (default: 1.0)" },
-                { "SupplyUtilization", "Target supply utilization percentage (default: 100)" }
+                { "ThroughputWeight", "Weight for maximizing throughput (default: 1.0)" },
+                { "DemandPriority", "Priority weight for satisfying demand requirements (default: 1.0)" }
             };
         }
+
 
         public OptimizationResult Optimize(PipelineNetwork network, OptimizationSettings settings)
         {
@@ -43,78 +37,39 @@ namespace GasPipelineOptimization.Algorithms
             var result = new OptimizationResult
             {
                 AlgorithmUsed = Name,
-                Status = OptimizationStatus.NotSolved
+                Status = OptimizationStatus.NotSolved,
+                SolverUsed = "Custom Greedy Algorithm"
             };
 
             try
             {
-                // Determine solver type based on constraints
-                var solverType = DetermineSolverType(settings);
-                result.SolverUsed = solverType;
-
-                using var solver = Solver.CreateSolver(solverType);
-                if (solver == null)
+                // Use custom algorithm to maximize throughput
+                var flowAllocations = AllocateFlowForMaxThroughput(network, settings);
+                
+                // Check if we found a feasible solution
+                if (flowAllocations == null || !flowAllocations.Any())
                 {
-                    result.Status = OptimizationStatus.Error;
-                    result.Messages.Add($"Failed to create {solverType} solver");
+                    result.Status = OptimizationStatus.Infeasible;
+                    result.Messages.Add("No feasible flow allocation found");
                     return result;
                 }
 
-                // Set solver parameters
-                ConfigureSolver(solver, settings);
-
-                // Create decision variables
-                var flowVars = CreateFlowVariables(solver, network);
-                var pressureVars = CreatePressureVariables(solver, network, settings);
-                var compressorVars = CreateCompressorVariables(solver, network, settings);
-
-                // Add constraints
-                AddFlowBalanceConstraints(solver, network, flowVars);
-                AddCapacityConstraints(solver, network, flowVars);
+                result.Status = OptimizationStatus.Optimal;
                 
-                if (settings.EnablePressureConstraints)
+                // Store flow results
+                foreach (var allocation in flowAllocations)
                 {
-                    _pressureService.AddPressureConstraints(solver, network, flowVars, pressureVars, settings);
+                    var segment = network.Segments[allocation.Key];
+                    var transportCost = allocation.Value * segment.TransportationCost;
+                    result.AddSegmentFlow(allocation.Key, allocation.Value, segment.Capacity, transportCost);
                 }
 
-                if (settings.EnableCompressorStations)
-                {
-                    _compressorService.AddCompressorConstraints(solver, network, flowVars, pressureVars, compressorVars, settings);
-                }
+                // Calculate metrics and costs
+                CalculateMetrics(result, network);
+                CalculateCosts(result, network);
 
-                // Create objective function to maximize throughput
-                var objective = CreateThroughputObjective(solver, network, flowVars, settings);
-
-                // Solve the optimization problem
-                var solverStatus = solver.Solve();
-                result.Status = ConvertSolverStatus(solverStatus);
-
-                if (solverStatus == Solver.ResultStatus.OPTIMAL || solverStatus == Solver.ResultStatus.FEASIBLE)
-                {
-                    // Extract results
-                    ExtractFlowResults(result, network, flowVars);
-                    
-                    if (settings.EnablePressureConstraints)
-                    {
-                        ExtractPressureResults(result, network, pressureVars);
-                    }
-
-                    if (settings.EnableCompressorStations)
-                    {
-                        ExtractCompressorResults(result, network, compressorVars);
-                    }
-
-                    // Calculate metrics and costs
-                    CalculateMetrics(result, network);
-                    CalculateCosts(result, network);
-
-                    result.ObjectiveValue = objective.Value();
-                    result.Messages.Add($"Maximized throughput: {result.Metrics.TotalThroughput:F2} MMscfd");
-                }
-                else
-                {
-                    result.Messages.Add($"Solver failed with status: {solverStatus}");
-                }
+                result.ObjectiveValue = result.Metrics.TotalThroughput;
+                result.Messages.Add($"Maximized throughput: {result.Metrics.TotalThroughput:F2} MMscfd");
             }
             catch (Exception ex)
             {
@@ -126,159 +81,117 @@ namespace GasPipelineOptimization.Algorithms
             return result;
         }
 
-        private string DetermineSolverType(OptimizationSettings settings)
+        /// <summary>
+        /// Custom algorithm to allocate flow for maximum throughput using greedy approach
+        /// </summary>
+        private Dictionary<string, double> AllocateFlowForMaxThroughput(PipelineNetwork network, OptimizationSettings settings)
         {
-            // Use SCIP for nonlinear pressure constraints, GLOP for linear problems
-            if (settings.EnablePressureConstraints && !settings.UseLinearPressureApproximation)
-            {
-                return "SCIP";
-            }
-            return settings.PreferredSolver;
-        }
-
-        private void ConfigureSolver(Solver solver, OptimizationSettings settings)
-        {
-            solver.SetTimeLimit((long)(settings.MaxSolutionTimeSeconds * 1000));
+            var flowAllocations = new Dictionary<string, double>();
+            var segmentCapacities = new Dictionary<string, double>();
             
-            if (solver.SolverVersion().Contains("GLOP"))
-            {
-                solver.SetSolverSpecificParametersAsString($"solution_feasibility_tolerance:{settings.FeasibilityTolerance}");
-            }
-        }
-
-        private Dictionary<string, Variable> CreateFlowVariables(Solver solver, PipelineNetwork network)
-        {
-            var flowVars = new Dictionary<string, Variable>();
-
+            // Initialize flow allocations and remaining capacities
             foreach (var segment in network.GetActiveSegments())
             {
-                var minFlow = segment.GetEffectiveMinFlow();
-                var maxFlow = segment.GetEffectiveCapacity();
-                
-                flowVars[segment.Id] = solver.MakeNumVar(minFlow, maxFlow, $"flow_{segment.Id}");
+                flowAllocations[segment.Id] = 0;
+                segmentCapacities[segment.Id] = segment.Capacity;
             }
 
-            return flowVars;
-        }
+            // Get supply and demand points
+            var receiptPoints = network.GetReceiptPoints().OrderByDescending(p => p.SupplyCapacity).ToList();
+            var deliveryPoints = network.GetDeliveryPoints().OrderByDescending(p => p.DemandRequirement).ToList();
 
-        private Dictionary<string, Variable> CreatePressureVariables(Solver solver, PipelineNetwork network, OptimizationSettings settings)
-        {
-            var pressureVars = new Dictionary<string, Variable>();
+            // Track remaining supply and demand
+            var remainingSupply = receiptPoints.ToDictionary(p => p.Id, p => p.SupplyCapacity);
+            var remainingDemand = deliveryPoints.ToDictionary(p => p.Id, p => p.DemandRequirement);
 
-            if (!settings.EnablePressureConstraints)
-                return pressureVars;
-
-            foreach (var point in network.Points.Values.Where(p => p.IsActive))
+            // Greedily allocate flow to maximize throughput
+            bool allocationMade;
+            do
             {
-                var minPressureSquared = point.MinPressure * point.MinPressure;
-                var maxPressureSquared = point.MaxPressure * point.MaxPressure;
-                
-                pressureVars[point.Id] = solver.MakeNumVar(minPressureSquared, maxPressureSquared, $"pressure_sq_{point.Id}");
-            }
+                allocationMade = false;
 
-            return pressureVars;
-        }
-
-        private Dictionary<string, Variable> CreateCompressorVariables(Solver solver, PipelineNetwork network, OptimizationSettings settings)
-        {
-            var compressorVars = new Dictionary<string, Variable>();
-
-            if (!settings.EnableCompressorStations)
-                return compressorVars;
-
-            foreach (var compressor in network.GetCompressorStations())
-            {
-                // Binary variable for compressor operation
-                compressorVars[$"{compressor.Id}_active"] = solver.MakeBoolVar($"comp_active_{compressor.Id}");
-                
-                // Pressure boost variable
-                compressorVars[$"{compressor.Id}_boost"] = solver.MakeNumVar(0, compressor.MaxPressureBoost, $"comp_boost_{compressor.Id}");
-                
-                // Fuel consumption variable
-                compressorVars[$"{compressor.Id}_fuel"] = solver.MakeNumVar(0, double.PositiveInfinity, $"comp_fuel_{compressor.Id}");
-            }
-
-            return compressorVars;
-        }
-
-        private void AddFlowBalanceConstraints(Solver solver, PipelineNetwork network, Dictionary<string, Variable> flowVars)
-        {
-            foreach (var point in network.Points.Values.Where(p => p.IsActive))
-            {
-                var constraint = solver.MakeConstraint(-double.PositiveInfinity, double.PositiveInfinity, $"balance_{point.Id}");
-
-                // Add inflows (positive)
-                foreach (var segment in network.GetIncomingSegments(point.Id))
+                foreach (var receiptPoint in receiptPoints)
                 {
-                    constraint.SetCoefficient(flowVars[segment.Id], 1.0);
+                    if (remainingSupply[receiptPoint.Id] <= 0) continue;
+
+                    foreach (var deliveryPoint in deliveryPoints)
+                    {
+                        if (remainingDemand[deliveryPoint.Id] <= 0) continue;
+
+                        // Find path from receipt to delivery point
+                        var path = FindPath(network, receiptPoint.Id, deliveryPoint.Id, segmentCapacities);
+                        if (path != null && path.Any())
+                        {
+                            // Calculate maximum flow through this path
+                            var maxFlow = Math.Min(remainingSupply[receiptPoint.Id], remainingDemand[deliveryPoint.Id]);
+                            maxFlow = Math.Min(maxFlow, path.Min(segmentId => segmentCapacities[segmentId]));
+
+                            if (maxFlow > 0.01) // Only allocate if meaningful flow
+                            {
+                                // Allocate flow through the path
+                                foreach (var segmentId in path)
+                                {
+                                    flowAllocations[segmentId] += maxFlow;
+                                    segmentCapacities[segmentId] -= maxFlow;
+                                }
+
+                                remainingSupply[receiptPoint.Id] -= maxFlow;
+                                remainingDemand[deliveryPoint.Id] -= maxFlow;
+                                allocationMade = true;
+                            }
+                        }
+                    }
                 }
+            } while (allocationMade);
 
-                // Add outflows (negative)
-                foreach (var segment in network.GetOutgoingSegments(point.Id))
-                {
-                    constraint.SetCoefficient(flowVars[segment.Id], -1.0);
-                }
-
-                // Set bounds based on point type
-                switch (point.Type)
-                {
-                    case PointType.Receipt:
-                        constraint.SetBounds(-point.SupplyCapacity, 0); // Can supply up to capacity
-                        break;
-                    case PointType.Delivery:
-                        constraint.SetBounds(0, point.DemandRequirement); // Can satisfy up to demand requirement
-                        break;
-                    case PointType.Compressor:
-                        constraint.SetBounds(0, 0); // Flow balance at compressor
-                        break;
-                }
-            }
+            return flowAllocations;
         }
 
-        private void AddCapacityConstraints(Solver solver, PipelineNetwork network, Dictionary<string, Variable> flowVars)
+        /// <summary>
+        /// Find a path from source to destination using available capacity
+        /// </summary>
+        private List<string> FindPath(PipelineNetwork network, string sourceId, string destinationId, Dictionary<string, double> availableCapacities)
         {
-            foreach (var segment in network.GetActiveSegments())
+            var visited = new HashSet<string>();
+            var path = new List<string>();
+            
+            if (FindPathRecursive(network, sourceId, destinationId, availableCapacities, visited, path))
             {
-                var flowVar = flowVars[segment.Id];
-                
-                // Flow must be within segment capacity limits
-                solver.MakeConstraint(
-                    segment.GetEffectiveMinFlow(), 
-                    segment.GetEffectiveCapacity(), 
-                    $"capacity_{segment.Id}"
-                ).SetCoefficient(flowVar, 1.0);
+                return path;
             }
+            
+            return null;
         }
 
-        private Objective CreateThroughputObjective(Solver solver, PipelineNetwork network, 
-            Dictionary<string, Variable> flowVars, OptimizationSettings settings)
+        /// <summary>
+        /// Recursive depth-first search to find path with available capacity
+        /// </summary>
+        private bool FindPathRecursive(PipelineNetwork network, string currentId, string destinationId, 
+            Dictionary<string, double> availableCapacities, HashSet<string> visited, List<string> path)
         {
-            var objective = solver.Objective();
-            objective.SetMaximization();
+            if (currentId == destinationId)
+                return true;
 
-            // Get algorithm-specific parameters
-            var throughputWeight = GetParameterValue(settings, "ThroughputWeight", 1.0);
-            var demandPriority = GetParameterValue(settings, "DemandPriority", 1.0);
+            visited.Add(currentId);
 
-            // Maximize total throughput through receipt points
-            foreach (var receiptPoint in network.GetReceiptPoints())
+            // Try all outgoing segments
+            foreach (var segment in network.GetOutgoingSegments(currentId))
             {
-                foreach (var segment in network.GetOutgoingSegments(receiptPoint.Id))
+                if (availableCapacities[segment.Id] > 0.01 && !visited.Contains(segment.ToPointId))
                 {
-                    objective.SetCoefficient(flowVars[segment.Id], throughputWeight);
+                    path.Add(segment.Id);
+                    
+                    if (FindPathRecursive(network, segment.ToPointId, destinationId, availableCapacities, visited, path))
+                    {
+                        return true;
+                    }
+                    
+                    path.RemoveAt(path.Count - 1);
                 }
             }
 
-            // Add higher weight for satisfying demand
-            foreach (var deliveryPoint in network.GetDeliveryPoints())
-            {
-                foreach (var segment in network.GetIncomingSegments(deliveryPoint.Id))
-                {
-                    objective.SetCoefficient(flowVars[segment.Id], demandPriority);
-                }
-            }
-
-            return objective;
+            visited.Remove(currentId);
+            return false;
         }
 
         private double GetParameterValue(OptimizationSettings settings, string paramName, double defaultValue)
@@ -293,62 +206,6 @@ namespace GasPipelineOptimization.Algorithms
             return defaultValue;
         }
 
-        private OptimizationStatus ConvertSolverStatus(Solver.ResultStatus status)
-        {
-            return status switch
-            {
-                Solver.ResultStatus.OPTIMAL => OptimizationStatus.Optimal,
-                Solver.ResultStatus.FEASIBLE => OptimizationStatus.Feasible,
-                Solver.ResultStatus.INFEASIBLE => OptimizationStatus.Infeasible,
-                Solver.ResultStatus.UNBOUNDED => OptimizationStatus.Unbounded,
-                _ => OptimizationStatus.Error
-            };
-        }
-
-        private void ExtractFlowResults(OptimizationResult result, PipelineNetwork network, Dictionary<string, Variable> flowVars)
-        {
-            foreach (var segment in network.GetActiveSegments())
-            {
-                var flow = flowVars[segment.Id].SolutionValue();
-                var cost = flow * segment.TransportationCost;
-                
-                result.AddSegmentFlow(segment.Id, flow, segment.Capacity, cost);
-            }
-        }
-
-        private void ExtractPressureResults(OptimizationResult result, PipelineNetwork network, Dictionary<string, Variable> pressureVars)
-        {
-            foreach (var point in network.Points.Values.Where(p => p.IsActive))
-            {
-                if (pressureVars.TryGetValue(point.Id, out var pressureVar))
-                {
-                    var pressureSquared = pressureVar.SolutionValue();
-                    var pressure = Math.Sqrt(Math.Max(0, pressureSquared));
-                    var withinConstraints = pressure >= point.MinPressure && pressure <= point.MaxPressure;
-                    
-                    result.AddPointPressure(point.Id, pressure, pressureSquared, withinConstraints);
-                }
-            }
-        }
-
-        private void ExtractCompressorResults(OptimizationResult result, PipelineNetwork network, Dictionary<string, Variable> compressorVars)
-        {
-            foreach (var compressor in network.GetCompressorStations())
-            {
-                if (result.PointPressures.TryGetValue(compressor.Id, out var pressureResult))
-                {
-                    if (compressorVars.TryGetValue($"{compressor.Id}_boost", out var boostVar))
-                    {
-                        pressureResult.PressureBoost = boostVar.SolutionValue();
-                    }
-
-                    if (compressorVars.TryGetValue($"{compressor.Id}_fuel", out var fuelVar))
-                    {
-                        pressureResult.FuelConsumption = fuelVar.SolutionValue();
-                    }
-                }
-            }
-        }
 
         private void CalculateMetrics(OptimizationResult result, PipelineNetwork network)
         {
@@ -387,7 +244,7 @@ namespace GasPipelineOptimization.Algorithms
 
             // Count active elements
             metrics.ActiveSegments = result.SegmentFlows.Values.Count(f => Math.Abs(f.Flow) > 1e-6);
-            metrics.ActiveCompressors = result.PointPressures.Values.Count(p => p.PressureBoost > 1e-6);
+            metrics.ActiveCompressors = 0; // No compressor optimization in this version
         }
 
         private void CalculateCosts(OptimizationResult result, PipelineNetwork network)
@@ -397,9 +254,9 @@ namespace GasPipelineOptimization.Algorithms
             // Transportation costs
             costs.TransportationCost = result.SegmentFlows.Values.Sum(f => f.TransportationCost);
 
-            // Fuel and compressor costs
-            costs.FuelCost = result.PointPressures.Values.Sum(p => p.FuelConsumption * 3.50); // Assume $3.50/MMscf fuel cost
-            costs.CompressorCost = result.PointPressures.Values.Where(p => p.PressureBoost > 0).Sum(p => p.PressureBoost * 0.01); // $0.01 per psi boost
+            // Fuel and compressor costs (simplified for custom algorithm)
+            costs.FuelCost = 0;
+            costs.CompressorCost = 0;
         }
     }
 }

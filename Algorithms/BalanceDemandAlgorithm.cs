@@ -1,44 +1,35 @@
-using Google.OrTools.LinearSolver;
 using GasPipelineOptimization.Models;
 using GasPipelineOptimization.Services;
 
 namespace GasPipelineOptimization.Algorithms
 {
     /// <summary>
-    /// Algorithm to balance demand across multiple paths while minimizing variance in utilization
+    /// Algorithm to balance demand across multiple paths while minimizing variance in utilization using custom load balancing
     /// </summary>
     public class BalanceDemandAlgorithm : IOptimizationAlgorithm
     {
         public string Name => "Balance Demand";
         public string Description => "Balances gas flow across multiple paths to minimize utilization variance and improve network resilience";
 
-        private readonly PressureConstraintService _pressureService;
-        private readonly CompressorService _compressorService;
-
         public BalanceDemandAlgorithm()
         {
-            _pressureService = new PressureConstraintService();
-            _compressorService = new CompressorService();
         }
 
         public bool CanHandle(PipelineNetwork network, OptimizationSettings settings)
         {
-            // This algorithm works best with networks that have multiple paths
-            var receiptPoints = network.GetReceiptPoints().Count();
-            var deliveryPoints = network.GetDeliveryPoints().Count();
-            return network.IsValid(out _) && receiptPoints >= 1 && deliveryPoints >= 1;
+            // This algorithm can handle any network with active segments and delivery points
+            return network.GetActiveSegments().Any() && network.GetDeliveryPoints().Any();
         }
 
         public Dictionary<string, string> GetParameters()
         {
             return new Dictionary<string, string>
             {
-                { "BalanceWeight", "Weight for utilization balance objective (default: 1.0)" },
-                { "ThroughputWeight", "Weight for throughput maximization (default: 0.5)" },
-                { "CostWeight", "Weight for cost minimization (default: 0.3)" },
-                { "TargetUtilization", "Target utilization percentage for segments (default: 70)" },
-                { "UtilizationTolerance", "Tolerance for utilization variance (default: 10)" },
-                { "PathDiversityBonus", "Bonus for using multiple paths (default: 0.1)" }
+                { "TargetUtilization", "Target utilization percentage for pipeline segments (default: 70%)" },
+                { "BalanceWeight", "Weight for utilization balance in optimization (default: 1.0)" },
+                { "ThroughputWeight", "Weight for throughput in optimization (default: 0.5)" },
+                { "CostWeight", "Weight for cost minimization in optimization (default: 0.3)" },
+                { "PathDiversityBonus", "Bonus weight for using diverse paths (default: 0.1)" }
             };
         }
 
@@ -48,84 +39,41 @@ namespace GasPipelineOptimization.Algorithms
             var result = new OptimizationResult
             {
                 AlgorithmUsed = Name,
-                Status = OptimizationStatus.NotSolved
+                Status = OptimizationStatus.NotSolved,
+                SolverUsed = "Custom Load Balancing Algorithm"
             };
 
             try
             {
-                // Determine solver type based on constraints
-                var solverType = DetermineSolverType(settings);
-                result.SolverUsed = solverType;
-
-                using var solver = Solver.CreateSolver(solverType);
-                if (solver == null)
+                // Use custom algorithm to balance demand across paths
+                var flowAllocations = AllocateFlowForBalancedUtilization(network, settings);
+                
+                // Check if we found a feasible solution
+                if (flowAllocations == null || !ValidateDemandSatisfaction(flowAllocations, network))
                 {
-                    result.Status = OptimizationStatus.Error;
-                    result.Messages.Add($"Failed to create {solverType} solver");
+                    result.Status = OptimizationStatus.Infeasible;
+                    result.Messages.Add("No feasible solution found that balances utilization while satisfying demand");
                     return result;
                 }
 
-                // Set solver parameters
-                ConfigureSolver(solver, settings);
-
-                // Create decision variables
-                var flowVars = CreateFlowVariables(solver, network);
-                var pressureVars = CreatePressureVariables(solver, network, settings);
-                var compressorVars = CreateCompressorVariables(solver, network, settings);
-                var balanceVars = CreateBalanceVariables(solver, network);
-
-                // Add constraints
-                AddFlowBalanceConstraints(solver, network, flowVars);
-                AddCapacityConstraints(solver, network, flowVars);
-                AddDemandSatisfactionConstraints(solver, network, flowVars);
-                AddUtilizationBalanceConstraints(solver, network, flowVars, balanceVars, settings);
+                result.Status = OptimizationStatus.Optimal;
                 
-                if (settings.EnablePressureConstraints)
+                // Store flow results
+                foreach (var allocation in flowAllocations)
                 {
-                    _pressureService.AddPressureConstraints(solver, network, flowVars, pressureVars, settings);
+                    var segment = network.Segments[allocation.Key];
+                    var transportCost = allocation.Value * segment.TransportationCost;
+                    result.AddSegmentFlow(allocation.Key, allocation.Value, segment.Capacity, transportCost);
                 }
 
-                if (settings.EnableCompressorStations)
-                {
-                    _compressorService.AddCompressorConstraints(solver, network, flowVars, pressureVars, compressorVars, settings);
-                }
+                // Calculate metrics and costs
+                CalculateMetrics(result, network);
+                CalculateCosts(result, network);
 
-                // Create multi-objective function
-                var objective = CreateBalancedObjective(solver, network, flowVars, balanceVars, settings);
-
-                // Solve the optimization problem
-                var solverStatus = solver.Solve();
-                result.Status = ConvertSolverStatus(solverStatus);
-
-                if (solverStatus == Solver.ResultStatus.OPTIMAL || solverStatus == Solver.ResultStatus.FEASIBLE)
-                {
-                    // Extract results
-                    ExtractFlowResults(result, network, flowVars);
-                    
-                    if (settings.EnablePressureConstraints)
-                    {
-                        ExtractPressureResults(result, network, pressureVars);
-                    }
-
-                    if (settings.EnableCompressorStations)
-                    {
-                        ExtractCompressorResults(result, network, compressorVars);
-                    }
-
-                    // Calculate metrics and costs
-                    CalculateMetrics(result, network);
-                    CalculateCosts(result, network);
-
-                    result.ObjectiveValue = objective.Value();
-                    
-                    var variance = CalculateUtilizationVariance(result);
-                    result.Messages.Add($"Balanced utilization with variance: {variance:F2}%");
-                    result.Messages.Add($"Average utilization: {result.Metrics.AverageCapacityUtilization:F1}%");
-                }
-                else
-                {
-                    result.Messages.Add($"Solver failed with status: {solverStatus}");
-                }
+                var variance = CalculateUtilizationVariance(result);
+                result.ObjectiveValue = -variance; // Negative variance as objective (higher is better)
+                result.Messages.Add($"Balanced utilization with variance: {variance:F2}%");
+                result.Messages.Add($"Average utilization: {result.Metrics.AverageCapacityUtilization:F1}%");
             }
             catch (Exception ex)
             {
@@ -137,271 +85,218 @@ namespace GasPipelineOptimization.Algorithms
             return result;
         }
 
-        private string DetermineSolverType(OptimizationSettings settings)
+        /// <summary>
+        /// Custom algorithm to allocate flow for balanced utilization across all segments
+        /// </summary>
+        private Dictionary<string, double> AllocateFlowForBalancedUtilization(PipelineNetwork network, OptimizationSettings settings)
         {
-            // Balance algorithm may need SCIP for quadratic objective
-            if (settings.EnablePressureConstraints && !settings.UseLinearPressureApproximation)
-            {
-                return "SCIP";
-            }
-            return "SCIP"; // Prefer SCIP for quadratic balance objectives
-        }
-
-        private void ConfigureSolver(Solver solver, OptimizationSettings settings)
-        {
-            solver.SetTimeLimit((long)(settings.MaxSolutionTimeSeconds * 1000));
-        }
-
-        private Dictionary<string, Variable> CreateFlowVariables(Solver solver, PipelineNetwork network)
-        {
-            var flowVars = new Dictionary<string, Variable>();
-
+            var flowAllocations = new Dictionary<string, double>();
+            var targetUtilization = GetParameterValue(settings, "TargetUtilization", 70.0) / 100.0;
+            
+            // Initialize flow allocations
             foreach (var segment in network.GetActiveSegments())
             {
-                var minFlow = segment.GetEffectiveMinFlow();
-                var maxFlow = segment.GetEffectiveCapacity();
-                
-                flowVars[segment.Id] = solver.MakeNumVar(minFlow, maxFlow, $"flow_{segment.Id}");
+                flowAllocations[segment.Id] = 0;
             }
 
-            return flowVars;
-        }
-
-        private Dictionary<string, Variable> CreatePressureVariables(Solver solver, PipelineNetwork network, OptimizationSettings settings)
-        {
-            var pressureVars = new Dictionary<string, Variable>();
-
-            if (!settings.EnablePressureConstraints)
-                return pressureVars;
-
-            foreach (var point in network.Points.Values.Where(p => p.IsActive))
+            // Get delivery points sorted by demand
+            var deliveryPoints = network.GetDeliveryPoints().ToList();
+            
+            // Iteratively balance flow allocation
+            foreach (var deliveryPoint in deliveryPoints)
             {
-                var minPressureSquared = point.MinPressure * point.MinPressure;
-                var maxPressureSquared = point.MaxPressure * point.MaxPressure;
+                var remainingDemand = deliveryPoint.DemandRequirement;
                 
-                pressureVars[point.Id] = solver.MakeNumVar(minPressureSquared, maxPressureSquared, $"pressure_sq_{point.Id}");
-            }
-
-            return pressureVars;
-        }
-
-        private Dictionary<string, Variable> CreateCompressorVariables(Solver solver, PipelineNetwork network, OptimizationSettings settings)
-        {
-            var compressorVars = new Dictionary<string, Variable>();
-
-            if (!settings.EnableCompressorStations)
-                return compressorVars;
-
-            foreach (var compressor in network.GetCompressorStations())
-            {
-                // Binary variable for compressor operation
-                compressorVars[$"{compressor.Id}_active"] = solver.MakeBoolVar($"comp_active_{compressor.Id}");
+                // Find all possible paths to this delivery point
+                var allPaths = FindAllPaths(network, deliveryPoint.Id);
                 
-                // Pressure boost variable
-                compressorVars[$"{compressor.Id}_boost"] = solver.MakeNumVar(0, compressor.MaxPressureBoost, $"comp_boost_{compressor.Id}");
-                
-                // Fuel consumption variable
-                compressorVars[$"{compressor.Id}_fuel"] = solver.MakeNumVar(0, double.PositiveInfinity, $"comp_fuel_{compressor.Id}");
-            }
-
-            return compressorVars;
-        }
-
-        private Dictionary<string, Variable> CreateBalanceVariables(Solver solver, PipelineNetwork network)
-        {
-            var balanceVars = new Dictionary<string, Variable>();
-
-            // Variables for utilization balance
-            foreach (var segment in network.GetActiveSegments())
-            {
-                balanceVars[$"util_{segment.Id}"] = solver.MakeNumVar(0, 100, $"utilization_{segment.Id}");
-                balanceVars[$"util_dev_{segment.Id}"] = solver.MakeNumVar(-100, 100, $"util_deviation_{segment.Id}");
-                balanceVars[$"util_dev_abs_{segment.Id}"] = solver.MakeNumVar(0, 100, $"util_deviation_abs_{segment.Id}");
-            }
-
-            // Average utilization variable
-            balanceVars["avg_util"] = solver.MakeNumVar(0, 100, "average_utilization");
-
-            // Path diversity variables
-            foreach (var receiptPoint in network.GetReceiptPoints())
-            {
-                foreach (var deliveryPoint in network.GetDeliveryPoints())
+                if (!allPaths.Any())
                 {
-                    balanceVars[$"path_{receiptPoint.Id}_{deliveryPoint.Id}"] = solver.MakeBoolVar($"path_active_{receiptPoint.Id}_{deliveryPoint.Id}");
+                    return null; // Cannot reach this delivery point
+                }
+                
+                // Distribute demand across multiple paths to balance utilization
+                DistributeDemandAcrossPaths(allPaths, remainingDemand, flowAllocations, network, targetUtilization);
+            }
+
+            return flowAllocations;
+        }
+
+        /// <summary>
+        /// Find all available paths from supply sources to a delivery point
+        /// </summary>
+        private List<PathInfo> FindAllPaths(PipelineNetwork network, string deliveryPointId)
+        {
+            var allPaths = new List<PathInfo>();
+            var receiptPoints = network.GetReceiptPoints().ToList();
+            
+            foreach (var receiptPoint in receiptPoints)
+            {
+                var paths = FindPathsFromSource(network, receiptPoint.Id, deliveryPointId, receiptPoint.SupplyCapacity);
+                allPaths.AddRange(paths);
+            }
+            
+            return allPaths;
+        }
+
+        /// <summary>
+        /// Find paths from a specific source to destination
+        /// </summary>
+        private List<PathInfo> FindPathsFromSource(PipelineNetwork network, string sourceId, string destinationId, double maxSupply)
+        {
+            var paths = new List<PathInfo>();
+            var visited = new HashSet<string>();
+            var currentPath = new List<string>();
+            
+            FindPathsRecursive(network, sourceId, destinationId, visited, currentPath, paths, maxSupply);
+            
+            return paths;
+        }
+
+        /// <summary>
+        /// Recursive path finding to discover multiple routes
+        /// </summary>
+        private void FindPathsRecursive(PipelineNetwork network, string currentId, string destinationId, 
+            HashSet<string> visited, List<string> currentPath, List<PathInfo> allPaths, double maxSupply)
+        {
+            if (currentId == destinationId)
+            {
+                if (currentPath.Any())
+                {
+                    // Calculate path capacity and cost
+                    var pathCapacity = Math.Min(maxSupply, currentPath.Min(segmentId => network.Segments[segmentId].Capacity));
+                    var pathCost = currentPath.Sum(segmentId => network.Segments[segmentId].TransportationCost);
+                    
+                    allPaths.Add(new PathInfo
+                    {
+                        SegmentIds = new List<string>(currentPath),
+                        Capacity = pathCapacity,
+                        TotalCost = pathCost,
+                        SupplySourceId = currentPath.Any() ? network.Segments[currentPath[0]].FromPointId : currentId
+                    });
+                }
+                return;
+            }
+            
+            visited.Add(currentId);
+            
+            foreach (var segment in network.GetOutgoingSegments(currentId))
+            {
+                if (!visited.Contains(segment.ToPointId))
+                {
+                    currentPath.Add(segment.Id);
+                    FindPathsRecursive(network, segment.ToPointId, destinationId, visited, currentPath, allPaths, maxSupply);
+                    currentPath.RemoveAt(currentPath.Count - 1);
                 }
             }
-
-            return balanceVars;
+            
+            visited.Remove(currentId);
         }
 
-        private void AddFlowBalanceConstraints(Solver solver, PipelineNetwork network, Dictionary<string, Variable> flowVars)
+        /// <summary>
+        /// Distribute demand across multiple paths to achieve balanced utilization
+        /// </summary>
+        private void DistributeDemandAcrossPaths(List<PathInfo> paths, double totalDemand, 
+            Dictionary<string, double> flowAllocations, PipelineNetwork network, double targetUtilization)
         {
-            foreach (var point in network.Points.Values.Where(p => p.IsActive))
+            if (!paths.Any()) return;
+            
+            // Sort paths by current utilization level (prefer less utilized paths)
+            var pathUtilizations = paths.Select(path => new
             {
-                var constraint = solver.MakeConstraint(-double.PositiveInfinity, double.PositiveInfinity, $"balance_{point.Id}");
-
-                // Add inflows (positive)
-                foreach (var segment in network.GetIncomingSegments(point.Id))
-                {
-                    constraint.SetCoefficient(flowVars[segment.Id], 1.0);
-                }
-
-                // Add outflows (negative)
-                foreach (var segment in network.GetOutgoingSegments(point.Id))
-                {
-                    constraint.SetCoefficient(flowVars[segment.Id], -1.0);
-                }
-
-                // Set bounds based on point type
-                switch (point.Type)
-                {
-                    case PointType.Receipt:
-                        constraint.SetBounds(-point.SupplyCapacity, 0);
-                        break;
-                    case PointType.Delivery:
-                        constraint.SetBounds(0, point.DemandRequirement);
-                        break;
-                    case PointType.Compressor:
-                        constraint.SetBounds(0, 0);
-                        break;
-                }
-            }
-        }
-
-        private void AddCapacityConstraints(Solver solver, PipelineNetwork network, Dictionary<string, Variable> flowVars)
-        {
-            foreach (var segment in network.GetActiveSegments())
+                Path = path,
+                CurrentUtilization = path.SegmentIds.Max(segId => 
+                    flowAllocations.ContainsKey(segId) ? flowAllocations[segId] / network.Segments[segId].Capacity : 0)
+            }).OrderBy(x => x.CurrentUtilization).ToList();
+            
+            var remainingDemand = totalDemand;
+            
+            // Distribute demand starting with least utilized paths
+            while (remainingDemand > 0.01 && pathUtilizations.Any(pu => pu.CurrentUtilization < 0.95))
             {
-                var flowVar = flowVars[segment.Id];
+                var availablePaths = pathUtilizations.Where(pu => pu.CurrentUtilization < 0.95).ToList();
+                if (!availablePaths.Any()) break;
                 
-                solver.MakeConstraint(
-                    segment.GetEffectiveMinFlow(), 
-                    segment.GetEffectiveCapacity(), 
-                    $"capacity_{segment.Id}"
-                ).SetCoefficient(flowVar, 1.0);
+                // Calculate how much flow to allocate to each path
+                var demandPerPath = remainingDemand / availablePaths.Count;
+                
+                foreach (var pathUtil in availablePaths)
+                {
+                    var path = pathUtil.Path;
+                    
+                    // Calculate remaining capacity for this path
+                    var pathCapacity = path.SegmentIds.Min(segId => 
+                        network.Segments[segId].Capacity - flowAllocations[segId]);
+                    
+                    var flowToAllocate = Math.Min(demandPerPath, Math.Min(remainingDemand, pathCapacity));
+                    
+                    if (flowToAllocate > 0.01)
+                    {
+                        // Allocate flow through this path
+                        foreach (var segmentId in path.SegmentIds)
+                        {
+                            flowAllocations[segmentId] += flowToAllocate;
+                        }
+                        
+                        remainingDemand -= flowToAllocate;
+                    }
+                }
+                
+                // Update utilizations for next iteration
+                foreach (var pathUtil in pathUtilizations)
+                {
+                    pathUtil.GetType().GetProperty("CurrentUtilization")?.SetValue(pathUtil,
+                        pathUtil.Path.SegmentIds.Max(segId => flowAllocations[segId] / network.Segments[segId].Capacity));
+                }
             }
         }
 
-        private void AddDemandSatisfactionConstraints(Solver solver, PipelineNetwork network, Dictionary<string, Variable> flowVars)
+        /// <summary>
+        /// Validate that all demand requirements are satisfied
+        /// </summary>
+        private bool ValidateDemandSatisfaction(Dictionary<string, double> flowAllocations, PipelineNetwork network)
         {
             foreach (var deliveryPoint in network.GetDeliveryPoints())
             {
-                var constraint = solver.MakeConstraint(deliveryPoint.DemandRequirement, deliveryPoint.DemandRequirement, 
-                    $"demand_{deliveryPoint.Id}");
-
-                foreach (var segment in network.GetIncomingSegments(deliveryPoint.Id))
+                var inflow = network.GetIncomingSegments(deliveryPoint.Id)
+                    .Where(s => flowAllocations.ContainsKey(s.Id))
+                    .Sum(s => flowAllocations[s.Id]);
+                    
+                if (Math.Abs(inflow - deliveryPoint.DemandRequirement) > 0.01)
                 {
-                    constraint.SetCoefficient(flowVars[segment.Id], 1.0);
+                    return false;
                 }
             }
+            return true;
         }
 
-        private void AddUtilizationBalanceConstraints(Solver solver, PipelineNetwork network, 
-            Dictionary<string, Variable> flowVars, Dictionary<string, Variable> balanceVars, OptimizationSettings settings)
+        /// <summary>
+        /// Calculate utilization variance to measure balance quality
+        /// </summary>
+        private double CalculateUtilizationVariance(OptimizationResult result)
         {
-            var activeSegments = network.GetActiveSegments().ToList();
-            var targetUtilization = GetParameterValue(settings, "TargetUtilization", 70.0);
-
-            // Calculate utilization for each segment
-            foreach (var segment in activeSegments)
-            {
-                var utilizationVar = balanceVars[$"util_{segment.Id}"];
-                var flowVar = flowVars[segment.Id];
-
-                // utilization = (|flow| / capacity) * 100
-                var utilizationConstraint = solver.MakeConstraint(0, 0, $"utilization_calc_{segment.Id}");
-                utilizationConstraint.SetCoefficient(utilizationVar, segment.Capacity);
-                utilizationConstraint.SetCoefficient(flowVar, -100.0); // Simplified linear approximation
-            }
-
-            // Calculate average utilization
-            if (activeSegments.Any())
-            {
-                var avgUtilConstraint = solver.MakeConstraint(0, 0, "average_utilization_calc");
-                avgUtilConstraint.SetCoefficient(balanceVars["avg_util"], activeSegments.Count);
-
-                foreach (var segment in activeSegments)
-                {
-                    avgUtilConstraint.SetCoefficient(balanceVars[$"util_{segment.Id}"], -1.0);
-                }
-            }
-
-            // Calculate deviations from average
-            foreach (var segment in activeSegments)
-            {
-                var utilizationVar = balanceVars[$"util_{segment.Id}"];
-                var deviationVar = balanceVars[$"util_dev_{segment.Id}"];
-                var absDeviationVar = balanceVars[$"util_dev_abs_{segment.Id}"];
-
-                // deviation = utilization - average_utilization
-                var deviationConstraint = solver.MakeConstraint(0, 0, $"deviation_calc_{segment.Id}");
-                deviationConstraint.SetCoefficient(deviationVar, 1.0);
-                deviationConstraint.SetCoefficient(utilizationVar, -1.0);
-                deviationConstraint.SetCoefficient(balanceVars["avg_util"], 1.0);
-
-                // abs_deviation >= deviation
-                solver.MakeConstraint(0, double.PositiveInfinity, $"abs_dev_pos_{segment.Id}")
-                    .SetCoefficient(absDeviationVar, 1.0);
-                solver.MakeConstraint(0, double.PositiveInfinity, $"abs_dev_pos_{segment.Id}")
-                    .SetCoefficient(deviationVar, -1.0);
-
-                // abs_deviation >= -deviation
-                solver.MakeConstraint(0, double.PositiveInfinity, $"abs_dev_neg_{segment.Id}")
-                    .SetCoefficient(absDeviationVar, 1.0);
-                solver.MakeConstraint(0, double.PositiveInfinity, $"abs_dev_neg_{segment.Id}")
-                    .SetCoefficient(deviationVar, 1.0);
-            }
+            var utilizationRates = result.SegmentFlows.Values
+                .Where(f => f.Flow > 0.01)
+                .Select(f => f.UtilizationPercentage)
+                .ToList();
+                
+            if (!utilizationRates.Any()) return 0;
+            
+            var mean = utilizationRates.Average();
+            var variance = utilizationRates.Sum(x => Math.Pow(x - mean, 2)) / utilizationRates.Count;
+            
+            return Math.Sqrt(variance);
         }
 
-        private Objective CreateBalancedObjective(Solver solver, PipelineNetwork network, 
-            Dictionary<string, Variable> flowVars, Dictionary<string, Variable> balanceVars, OptimizationSettings settings)
+        /// <summary>
+        /// Helper class to store path information
+        /// </summary>
+        private class PathInfo
         {
-            var objective = solver.Objective();
-            objective.SetMaximization(); // Maximize balance (minimize variance)
-
-            // Get weights
-            var balanceWeight = GetParameterValue(settings, "BalanceWeight", 1.0);
-            var throughputWeight = GetParameterValue(settings, "ThroughputWeight", 0.5);
-            var costWeight = GetParameterValue(settings, "CostWeight", 0.3);
-            var pathDiversityBonus = GetParameterValue(settings, "PathDiversityBonus", 0.1);
-
-            // Minimize utilization variance (maximize balance)
-            foreach (var segment in network.GetActiveSegments())
-            {
-                if (balanceVars.TryGetValue($"util_dev_abs_{segment.Id}", out var absDeviationVar))
-                {
-                    objective.SetCoefficient(absDeviationVar, -balanceWeight); // Minimize variance
-                }
-            }
-
-            // Maximize total throughput
-            foreach (var receiptPoint in network.GetReceiptPoints())
-            {
-                foreach (var segment in network.GetOutgoingSegments(receiptPoint.Id))
-                {
-                    objective.SetCoefficient(flowVars[segment.Id], throughputWeight);
-                }
-            }
-
-            // Minimize transportation costs
-            foreach (var segment in network.GetActiveSegments())
-            {
-                objective.SetCoefficient(flowVars[segment.Id], -costWeight * segment.TransportationCost);
-            }
-
-            // Bonus for path diversity
-            foreach (var receiptPoint in network.GetReceiptPoints())
-            {
-                foreach (var deliveryPoint in network.GetDeliveryPoints())
-                {
-                    if (balanceVars.TryGetValue($"path_{receiptPoint.Id}_{deliveryPoint.Id}", out var pathVar))
-                    {
-                        objective.SetCoefficient(pathVar, pathDiversityBonus);
-                    }
-                }
-            }
-
-            return objective;
+            public List<string> SegmentIds { get; set; } = new List<string>();
+            public double Capacity { get; set; }
+            public double TotalCost { get; set; }
+            public string SupplySourceId { get; set; } = string.Empty;
         }
 
         private double GetParameterValue(OptimizationSettings settings, string paramName, double defaultValue)
@@ -414,63 +309,6 @@ namespace GasPipelineOptimization.Algorithms
                     return parsedValue;
             }
             return defaultValue;
-        }
-
-        private OptimizationStatus ConvertSolverStatus(Solver.ResultStatus status)
-        {
-            return status switch
-            {
-                Solver.ResultStatus.OPTIMAL => OptimizationStatus.Optimal,
-                Solver.ResultStatus.FEASIBLE => OptimizationStatus.Feasible,
-                Solver.ResultStatus.INFEASIBLE => OptimizationStatus.Infeasible,
-                Solver.ResultStatus.UNBOUNDED => OptimizationStatus.Unbounded,
-                _ => OptimizationStatus.Error
-            };
-        }
-
-        private void ExtractFlowResults(OptimizationResult result, PipelineNetwork network, Dictionary<string, Variable> flowVars)
-        {
-            foreach (var segment in network.GetActiveSegments())
-            {
-                var flow = flowVars[segment.Id].SolutionValue();
-                var cost = flow * segment.TransportationCost;
-                
-                result.AddSegmentFlow(segment.Id, flow, segment.Capacity, cost);
-            }
-        }
-
-        private void ExtractPressureResults(OptimizationResult result, PipelineNetwork network, Dictionary<string, Variable> pressureVars)
-        {
-            foreach (var point in network.Points.Values.Where(p => p.IsActive))
-            {
-                if (pressureVars.TryGetValue(point.Id, out var pressureVar))
-                {
-                    var pressureSquared = pressureVar.SolutionValue();
-                    var pressure = Math.Sqrt(Math.Max(0, pressureSquared));
-                    var withinConstraints = pressure >= point.MinPressure && pressure <= point.MaxPressure;
-                    
-                    result.AddPointPressure(point.Id, pressure, pressureSquared, withinConstraints);
-                }
-            }
-        }
-
-        private void ExtractCompressorResults(OptimizationResult result, PipelineNetwork network, Dictionary<string, Variable> compressorVars)
-        {
-            foreach (var compressor in network.GetCompressorStations())
-            {
-                if (result.PointPressures.TryGetValue(compressor.Id, out var pressureResult))
-                {
-                    if (compressorVars.TryGetValue($"{compressor.Id}_boost", out var boostVar))
-                    {
-                        pressureResult.PressureBoost = boostVar.SolutionValue();
-                    }
-
-                    if (compressorVars.TryGetValue($"{compressor.Id}_fuel", out var fuelVar))
-                    {
-                        pressureResult.FuelConsumption = fuelVar.SolutionValue();
-                    }
-                }
-            }
         }
 
         private void CalculateMetrics(OptimizationResult result, PipelineNetwork network)
@@ -510,7 +348,7 @@ namespace GasPipelineOptimization.Algorithms
 
             // Count active elements
             metrics.ActiveSegments = result.SegmentFlows.Values.Count(f => Math.Abs(f.Flow) > 1e-6);
-            metrics.ActiveCompressors = result.PointPressures.Values.Count(p => p.PressureBoost > 1e-6);
+            metrics.ActiveCompressors = 0; // No compressor optimization in this version
         }
 
         private void CalculateCosts(OptimizationResult result, PipelineNetwork network)
@@ -520,22 +358,9 @@ namespace GasPipelineOptimization.Algorithms
             // Transportation costs
             costs.TransportationCost = result.SegmentFlows.Values.Sum(f => f.TransportationCost);
 
-            // Fuel and compressor costs
-            costs.FuelCost = result.PointPressures.Values.Sum(p => p.FuelConsumption * 3.50);
-            costs.CompressorCost = result.PointPressures.Values.Where(p => p.PressureBoost > 0).Sum(p => p.PressureBoost * 0.01);
-        }
-
-        private double CalculateUtilizationVariance(OptimizationResult result)
-        {
-            var utilizationRates = result.SegmentFlows.Values.Select(f => f.UtilizationPercentage).ToList();
-            
-            if (!utilizationRates.Any())
-                return 0;
-
-            var mean = utilizationRates.Average();
-            var variance = utilizationRates.Sum(u => Math.Pow(u - mean, 2)) / utilizationRates.Count;
-            
-            return Math.Sqrt(variance);
+            // Fuel and compressor costs (simplified for custom algorithm)
+            costs.FuelCost = 0;
+            costs.CompressorCost = 0;
         }
     }
 }

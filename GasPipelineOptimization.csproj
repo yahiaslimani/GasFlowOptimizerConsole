@@ -8,7 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Google.OrTools" Version="9.8.3296" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
