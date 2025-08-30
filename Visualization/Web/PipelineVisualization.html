@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gas Pipeline Network Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .controls {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .control-group label {
+            font-weight: 500;
+            color: #495057;
+        }
+
+        .control-group input, .control-group select {
+            padding: 5px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+        }
+
+        .visualization-container {
+            position: relative;
+            height: 700px;
+            overflow: hidden;
+        }
+
+        .info-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            max-width: 300px;
+            font-size: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        .info-panel h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+            border-bottom: 1px solid #dee2e6;
+            padding-bottom: 5px;
+        }
+
+        .info-item {
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .info-label {
+            font-weight: 500;
+            color: #6c757d;
+        }
+
+        .info-value {
+            color: #495057;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        /* SVG Styles */
+        .point-receipt {
+            fill: #28a745;
+            stroke: #1e7e34;
+            stroke-width: 2px;
+        }
+
+        .point-delivery {
+            fill: #dc3545;
+            stroke: #c82333;
+            stroke-width: 2px;
+        }
+
+        .point-compressor {
+            fill: #ffc107;
+            stroke: #e0a800;
+            stroke-width: 2px;
+        }
+
+        .point-inactive {
+            fill: #6c757d;
+            stroke: #495057;
+            stroke-width: 1px;
+            opacity: 0.5;
+        }
+
+        .segment {
+            stroke: #495057;
+            stroke-width: 2px;
+            fill: none;
+        }
+
+        .segment-active {
+            stroke: #007bff;
+            stroke-width: 3px;
+        }
+
+        .segment-inactive {
+            stroke: #6c757d;
+            stroke-width: 1px;
+            opacity: 0.5;
+        }
+
+        .segment-bidirectional {
+            stroke-dasharray: 5,5;
+        }
+
+        .point-label {
+            font-size: 11px;
+            font-weight: 500;
+            fill: #495057;
+            text-anchor: middle;
+            dominant-baseline: central;
+        }
+
+        .segment-label {
+            font-size: 10px;
+            fill: #495057;
+            text-anchor: middle;
+            dominant-baseline: central;
+        }
+
+        .flow-value {
+            font-size: 9px;
+            font-weight: bold;
+            fill: #007bff;
+            text-anchor: middle;
+            dominant-baseline: central;
+        }
+
+        .pressure-value {
+            font-size: 9px;
+            font-weight: bold;
+            fill: #dc3545;
+            text-anchor: middle;
+            dominant-baseline: central;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            font-size: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            gap: 8px;
+        }
+
+        .legend-symbol {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+        }
+
+        .stats-panel {
+            padding: 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #dee2e6;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 6px;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .button:hover {
+            background: #0056b3;
+        }
+
+        .button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Gas Pipeline Network Visualization</h1>
+            <p>Interactive visualization of pipeline infrastructure and optimization results</p>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label for="networkFile">Network File:</label>
+                <input type="file" id="networkFile" accept=".json" />
+            </div>
+            
+            <div class="control-group">
+                <label for="optimizationFile">Optimization Results:</label>
+                <input type="file" id="optimizationFile" accept=".json" />
+            </div>
+
+            <div class="control-group">
+                <label for="showFlow">Show Flow:</label>
+                <input type="checkbox" id="showFlow" checked />
+            </div>
+
+            <div class="control-group">
+                <label for="showPressure">Show Pressure:</label>
+                <input type="checkbox" id="showPressure" checked />
+            </div>
+
+            <div class="control-group">
+                <label for="scaleMode">Scale Mode:</label>
+                <select id="scaleMode">
+                    <option value="auto">Auto Fit</option>
+                    <option value="capacity">By Capacity</option>
+                    <option value="pressure">By Pressure</option>
+                </select>
+            </div>
+
+            <button class="button" onclick="refreshVisualization()">Refresh</button>
+            <button class="button" onclick="exportVisualization()">Export PNG</button>
+        </div>
+
+        <div class="visualization-container">
+            <svg id="networkSvg" width="100%" height="100%"></svg>
+            
+            <div class="info-panel" id="infoPanel" style="display: none;">
+                <h4>Selected Element</h4>
+                <div id="infoContent"></div>
+            </div>
+
+            <div class="legend">
+                <h4 style="margin: 0 0 10px 0;">Legend</h4>
+                <div class="legend-item">
+                    <div class="legend-symbol point-receipt"></div>
+                    <span>Receipt Point (Supply)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-symbol point-delivery"></div>
+                    <span>Delivery Point (Demand)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-symbol point-compressor"></div>
+                    <span>Compressor Station</span>
+                </div>
+                <div class="legend-item">
+                    <div style="width: 16px; height: 2px; background: #007bff;"></div>
+                    <span>Active Pipeline</span>
+                </div>
+                <div class="legend-item">
+                    <div style="width: 16px; height: 2px; background: #6c757d;"></div>
+                    <span>Inactive Pipeline</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-panel" id="statsPanel">
+            <!-- Statistics will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        // Global variables for network data and visualization state
+        let networkData = null;
+        let optimizationResult = null;
+        let svg = null;
+        let simulation = null;
+
+        // Initialize the visualization when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeVisualization();
+            setupEventListeners();
+        });
+
+        /**
+         * Initialize the D3.js visualization container and basic settings
+         */
+        function initializeVisualization() {
+            svg = d3.select("#networkSvg");
+            
+            // Add zoom and pan behavior
+            const zoom = d3.zoom()
+                .scaleExtent([0.1, 3])
+                .on("zoom", function(event) {
+                    svg.select(".main-group").attr("transform", event.transform);
+                });
+
+            svg.call(zoom);
+
+            // Create main group for all visualization elements
+            svg.append("g").attr("class", "main-group");
+
+            // Load default network if available
+            loadDefaultNetwork();
+        }
+
+        /**
+         * Set up event listeners for file inputs and controls
+         */
+        function setupEventListeners() {
+            document.getElementById('networkFile').addEventListener('change', handleNetworkFile);
+            document.getElementById('optimizationFile').addEventListener('change', handleOptimizationFile);
+            
+            // Add listeners for control changes
+            document.getElementById('showFlow').addEventListener('change', refreshVisualization);
+            document.getElementById('showPressure').addEventListener('change', refreshVisualization);
+            document.getElementById('scaleMode').addEventListener('change', refreshVisualization);
+        }
+
+        /**
+         * Handle network file upload and parsing
+         */
+        function handleNetworkFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    networkData = JSON.parse(e.target.result);
+                    console.log('Network loaded:', networkData);
+                    refreshVisualization();
+                } catch (error) {
+                    alert('Error parsing network file: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        /**
+         * Handle optimization results file upload and parsing
+         */
+        function handleOptimizationFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    optimizationResult = JSON.parse(e.target.result);
+                    console.log('Optimization results loaded:', optimizationResult);
+                    refreshVisualization();
+                } catch (error) {
+                    alert('Error parsing optimization results file: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        /**
+         * Load default network configuration for demonstration
+         */
+        function loadDefaultNetwork() {
+            // This would typically load from the config.json file
+            // For now, we'll create a simple default network
+            networkData = {
+                name: "Demo Pipeline Network",
+                points: {
+                    "R1": { id: "R1", name: "Supply Hub", type: "Receipt", x: 100, y: 200, 
+                           supplyCapacity: 1000, currentPressure: 950, minPressure: 900, maxPressure: 1000, isActive: true },
+                    "C1": { id: "C1", name: "Compressor", type: "Compressor", x: 300, y: 250,
+                           currentPressure: 600, minPressure: 400, maxPressure: 1200, maxPressureBoost: 500, isActive: true },
+                    "D1": { id: "D1", name: "City Delivery", type: "Delivery", x: 500, y: 200,
+                           demandRequirement: 700, currentPressure: 450, minPressure: 300, maxPressure: 600, isActive: true }
+                },
+                segments: {
+                    "S1": { id: "S1", name: "Main Line", fromPointId: "R1", toPointId: "C1", 
+                           capacity: 900, currentFlow: 0, isActive: true, isBidirectional: false },
+                    "S2": { id: "S2", name: "Delivery Line", fromPointId: "C1", toPointId: "D1",
+                           capacity: 750, currentFlow: 0, isActive: true, isBidirectional: false }
+                }
+            };
+            refreshVisualization();
+        }
+
+        /**
+         * Main function to refresh the entire visualization
+         */
+        function refreshVisualization() {
+            if (!networkData) return;
+
+            clearVisualization();
+            drawNetwork();
+            drawOptimizationResults();
+            updateStatistics();
+        }
+
+        /**
+         * Clear all existing visualization elements
+         */
+        function clearVisualization() {
+            svg.select(".main-group").selectAll("*").remove();
+        }
+
+        /**
+         * Draw the basic network topology (points and segments)
+         */
+        function drawNetwork() {
+            const mainGroup = svg.select(".main-group");
+            const svgRect = svg.node().getBoundingClientRect();
+            
+            // Calculate scaling factors to fit network in viewport
+            const points = Object.values(networkData.points);
+            const xExtent = d3.extent(points, d => d.x);
+            const yExtent = d3.extent(points, d => d.y);
+            
+            const padding = 50;
+            const scaleX = (svgRect.width - 2 * padding) / (xExtent[1] - xExtent[0]);
+            const scaleY = (svgRect.height - 2 * padding) / (yExtent[1] - yExtent[0]);
+            const scale = Math.min(scaleX, scaleY, 2); // Limit maximum scale
+
+            // Transform function to convert network coordinates to screen coordinates
+            const transform = (x, y) => [
+                (x - xExtent[0]) * scale + padding,
+                (y - yExtent[0]) * scale + padding
+            ];
+
+            // Draw segments (pipelines) first so they appear behind points
+            drawSegments(mainGroup, transform);
+            
+            // Draw points (facilities) on top of segments
+            drawPoints(mainGroup, transform);
+        }
+
+        /**
+         * Draw pipeline segments with appropriate styling
+         */
+        function drawSegments(container, transform) {
+            const segments = Object.values(networkData.segments);
+            
+            const segmentGroup = container.append("g").attr("class", "segments");
+
+            segments.forEach(segment => {
+                const fromPoint = networkData.points[segment.fromPointId];
+                const toPoint = networkData.points[segment.toPointId];
+                
+                if (!fromPoint || !toPoint) return;
+
+                const [x1, y1] = transform(fromPoint.x, fromPoint.y);
+                const [x2, y2] = transform(toPoint.x, toPoint.y);
+
+                // Draw the segment line
+                const line = segmentGroup.append("line")
+                    .attr("x1", x1)
+                    .attr("y1", y1)
+                    .attr("x2", x2)
+                    .attr("y2", y2)
+                    .attr("class", `segment ${segment.isActive ? 'segment-active' : 'segment-inactive'}`)
+                    .classed("segment-bidirectional", segment.isBidirectional)
+                    .style("stroke-width", Math.max(2, segment.capacity / 200)) // Scale line width by capacity
+                    .on("click", () => showSegmentInfo(segment))
+                    .on("mouseover", function() { d3.select(this).style("stroke-width", "5px"); })
+                    .on("mouseout", function() { d3.select(this).style("stroke-width", Math.max(2, segment.capacity / 200)); });
+
+                // Add segment label
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+                
+                segmentGroup.append("text")
+                    .attr("x", midX)
+                    .attr("y", midY - 10)
+                    .attr("class", "segment-label")
+                    .text(segment.name || segment.id);
+
+                // Add capacity info
+                segmentGroup.append("text")
+                    .attr("x", midX)
+                    .attr("y", midY + 5)
+                    .attr("class", "segment-label")
+                    .style("font-size", "9px")
+                    .text(`Cap: ${segment.capacity.toFixed(0)}`);
+            });
+        }
+
+        /**
+         * Draw network points (receipt, delivery, compressor stations)
+         */
+        function drawPoints(container, transform) {
+            const points = Object.values(networkData.points);
+            
+            const pointGroup = container.append("g").attr("class", "points");
+
+            points.forEach(point => {
+                const [x, y] = transform(point.x, point.y);
+                
+                // Determine point size based on capacity/demand
+                const baseSize = 15;
+                let size = baseSize;
+                if (point.type === 'Receipt') {
+                    size = baseSize + (point.supplyCapacity || 0) / 100;
+                } else if (point.type === 'Delivery') {
+                    size = baseSize + (point.demandRequirement || 0) / 100;
+                }
+                size = Math.max(baseSize, Math.min(size, 30)); // Clamp size
+
+                // Draw point circle
+                const circle = pointGroup.append("circle")
+                    .attr("cx", x)
+                    .attr("cy", y)
+                    .attr("r", size)
+                    .attr("class", `point-${point.type.toLowerCase()}`)
+                    .classed("point-inactive", !point.isActive)
+                    .on("click", () => showPointInfo(point))
+                    .on("mouseover", function() { 
+                        d3.select(this).attr("r", size * 1.2);
+                        showPointInfo(point);
+                    })
+                    .on("mouseout", function() { 
+                        d3.select(this).attr("r", size);
+                    });
+
+                // Add point label
+                pointGroup.append("text")
+                    .attr("x", x)
+                    .attr("y", y - size - 8)
+                    .attr("class", "point-label")
+                    .text(point.name || point.id);
+
+                // Add type indicator
+                pointGroup.append("text")
+                    .attr("x", x)
+                    .attr("y", y + size + 12)
+                    .attr("class", "point-label")
+                    .style("font-size", "9px")
+                    .text(point.type);
+            });
+        }
+
+        /**
+         * Draw optimization results overlay (flows, pressures, etc.)
+         */
+        function drawOptimizationResults() {
+            if (!optimizationResult || !networkData) return;
+
+            const mainGroup = svg.select(".main-group");
+            const showFlow = document.getElementById('showFlow').checked;
+            const showPressure = document.getElementById('showPressure').checked;
+
+            // Get the same transform function used for drawing the network
+            const points = Object.values(networkData.points);
+            const xExtent = d3.extent(points, d => d.x);
+            const yExtent = d3.extent(points, d => d.y);
+            const svgRect = svg.node().getBoundingClientRect();
+            const padding = 50;
+            const scaleX = (svgRect.width - 2 * padding) / (xExtent[1] - xExtent[0]);
+            const scaleY = (svgRect.height - 2 * padding) / (yExtent[1] - yExtent[0]);
+            const scale = Math.min(scaleX, scaleY, 2);
+            
+            const transform = (x, y) => [
+                (x - xExtent[0]) * scale + padding,
+                (y - yExtent[0]) * scale + padding
+            ];
+
+            // Draw flow values on segments
+            if (showFlow && optimizationResult.segmentFlows) {
+                drawFlowValues(mainGroup, transform);
+            }
+
+            // Draw pressure values on points
+            if (showPressure && optimizationResult.pointPressures) {
+                drawPressureValues(mainGroup, transform);
+            }
+        }
+
+        /**
+         * Draw flow values on pipeline segments
+         */
+        function drawFlowValues(container, transform) {
+            const flowGroup = container.append("g").attr("class", "flow-values");
+
+            Object.entries(optimizationResult.segmentFlows).forEach(([segmentId, flow]) => {
+                const segment = networkData.segments[segmentId];
+                if (!segment) return;
+
+                const fromPoint = networkData.points[segment.fromPointId];
+                const toPoint = networkData.points[segment.toPointId];
+                if (!fromPoint || !toPoint) return;
+
+                const [x1, y1] = transform(fromPoint.x, fromPoint.y);
+                const [x2, y2] = transform(toPoint.x, toPoint.y);
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+
+                // Add flow value text
+                flowGroup.append("text")
+                    .attr("x", midX)
+                    .attr("y", midY + 15)
+                    .attr("class", "flow-value")
+                    .text(`${flow.toFixed(1)}`);
+
+                // Add flow direction arrow if flow is significant
+                if (Math.abs(flow) > 1) {
+                    const arrowLength = 10;
+                    const angle = Math.atan2(y2 - y1, x2 - x1);
+                    const arrowX = midX + (flow > 0 ? arrowLength : -arrowLength) * Math.cos(angle);
+                    const arrowY = midY + (flow > 0 ? arrowLength : -arrowLength) * Math.sin(angle);
+
+                    flowGroup.append("path")
+                        .attr("d", `M ${midX},${midY} L ${arrowX},${arrowY}`)
+                        .attr("stroke", "#007bff")
+                        .attr("stroke-width", 2)
+                        .attr("marker-end", "url(#arrowhead)");
+                }
+            });
+
+            // Define arrowhead marker
+            const defs = container.append("defs");
+            defs.append("marker")
+                .attr("id", "arrowhead")
+                .attr("viewBox", "-10 -5 10 10")
+                .attr("refX", -5)
+                .attr("refY", 0)
+                .attr("markerWidth", 5)
+                .attr("markerHeight", 5)
+                .attr("orient", "auto")
+                .append("path")
+                .attr("d", "M -10,-5 L 0,0 L -10,5")
+                .attr("fill", "#007bff");
+        }
+
+        /**
+         * Draw pressure values on network points
+         */
+        function drawPressureValues(container, transform) {
+            const pressureGroup = container.append("g").attr("class", "pressure-values");
+
+            Object.entries(optimizationResult.pointPressures).forEach(([pointId, pressure]) => {
+                const point = networkData.points[pointId];
+                if (!point) return;
+
+                const [x, y] = transform(point.x, point.y);
+
+                // Add pressure value text
+                pressureGroup.append("text")
+                    .attr("x", x + 25)
+                    .attr("y", y - 10)
+                    .attr("class", "pressure-value")
+                    .text(`P: ${pressure.toFixed(0)}`);
+            });
+        }
+
+        /**
+         * Show detailed information about a selected point
+         */
+        function showPointInfo(point) {
+            const infoPanel = document.getElementById('infoPanel');
+            const infoContent = document.getElementById('infoContent');
+            
+            let html = `
+                <div class="info-item">
+                    <span class="info-label">ID:</span>
+                    <span class="info-value">${point.id}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Name:</span>
+                    <span class="info-value">${point.name}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Type:</span>
+                    <span class="info-value">${point.type}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Status:</span>
+                    <span class="info-value">${point.isActive ? 'Active' : 'Inactive'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Current Pressure:</span>
+                    <span class="info-value">${point.currentPressure.toFixed(1)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Min Pressure:</span>
+                    <span class="info-value">${point.minPressure.toFixed(1)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Max Pressure:</span>
+                    <span class="info-value">${point.maxPressure.toFixed(1)}</span>
+                </div>
+            `;
+
+            if (point.type === 'Receipt') {
+                html += `
+                    <div class="info-item">
+                        <span class="info-label">Supply Capacity:</span>
+                        <span class="info-value">${point.supplyCapacity.toFixed(1)}</span>
+                    </div>
+                `;
+            } else if (point.type === 'Delivery') {
+                html += `
+                    <div class="info-item">
+                        <span class="info-label">Demand Required:</span>
+                        <span class="info-value">${point.demandRequirement.toFixed(1)}</span>
+                    </div>
+                `;
+            } else if (point.type === 'Compressor') {
+                html += `
+                    <div class="info-item">
+                        <span class="info-label">Max Boost:</span>
+                        <span class="info-value">${point.maxPressureBoost.toFixed(1)}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Fuel Rate:</span>
+                        <span class="info-value">${(point.fuelConsumptionRate * 100).toFixed(2)}%</span>
+                    </div>
+                `;
+            }
+
+            // Add optimization results if available
+            if (optimizationResult && optimizationResult.pointPressures && optimizationResult.pointPressures[point.id]) {
+                html += `
+                    <hr style="margin: 10px 0;">
+                    <div class="info-item">
+                        <span class="info-label">Optimized Pressure:</span>
+                        <span class="info-value">${optimizationResult.pointPressures[point.id].toFixed(1)}</span>
+                    </div>
+                `;
+            }
+
+            infoContent.innerHTML = html;
+            infoPanel.style.display = 'block';
+        }
+
+        /**
+         * Show detailed information about a selected segment
+         */
+        function showSegmentInfo(segment) {
+            const infoPanel = document.getElementById('infoPanel');
+            const infoContent = document.getElementById('infoContent');
+            
+            let html = `
+                <div class="info-item">
+                    <span class="info-label">ID:</span>
+                    <span class="info-value">${segment.id}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Name:</span>
+                    <span class="info-value">${segment.name}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">From:</span>
+                    <span class="info-value">${segment.fromPointId}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">To:</span>
+                    <span class="info-value">${segment.toPointId}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Capacity:</span>
+                    <span class="info-value">${segment.capacity.toFixed(1)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Length:</span>
+                    <span class="info-value">${segment.length ? segment.length.toFixed(1) + ' km' : 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Bidirectional:</span>
+                    <span class="info-value">${segment.isBidirectional ? 'Yes' : 'No'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Status:</span>
+                    <span class="info-value">${segment.isActive ? 'Active' : 'Inactive'}</span>
+                </div>
+            `;
+
+            // Add optimization results if available
+            if (optimizationResult && optimizationResult.segmentFlows && optimizationResult.segmentFlows[segment.id]) {
+                const flow = optimizationResult.segmentFlows[segment.id];
+                const utilization = (Math.abs(flow) / segment.capacity * 100).toFixed(1);
+                
+                html += `
+                    <hr style="margin: 10px 0;">
+                    <div class="info-item">
+                        <span class="info-label">Optimized Flow:</span>
+                        <span class="info-value">${flow.toFixed(1)}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Utilization:</span>
+                        <span class="info-value">${utilization}%</span>
+                    </div>
+                `;
+            }
+
+            infoContent.innerHTML = html;
+            infoPanel.style.display = 'block';
+        }
+
+        /**
+         * Update statistics panel with network and optimization metrics
+         */
+        function updateStatistics() {
+            const statsPanel = document.getElementById('statsPanel');
+            
+            if (!networkData) {
+                statsPanel.innerHTML = '<div class="stat-card"><div class="stat-value">No Data</div><div class="stat-label">Load Network</div></div>';
+                return;
+            }
+
+            const points = Object.values(networkData.points);
+            const segments = Object.values(networkData.segments);
+            
+            const receiptPoints = points.filter(p => p.type === 'Receipt');
+            const deliveryPoints = points.filter(p => p.type === 'Delivery');
+            const compressorPoints = points.filter(p => p.type === 'Compressor');
+            
+            const totalSupply = receiptPoints.reduce((sum, p) => sum + (p.supplyCapacity || 0), 0);
+            const totalDemand = deliveryPoints.reduce((sum, p) => sum + (p.demandRequirement || 0), 0);
+            const totalCapacity = segments.reduce((sum, s) => sum + s.capacity, 0);
+
+            let html = `
+                <div class="stat-card">
+                    <div class="stat-value">${points.length}</div>
+                    <div class="stat-label">Total Points</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${segments.length}</div>
+                    <div class="stat-label">Pipeline Segments</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${receiptPoints.length}</div>
+                    <div class="stat-label">Supply Sources</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${deliveryPoints.length}</div>
+                    <div class="stat-label">Delivery Points</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${compressorPoints.length}</div>
+                    <div class="stat-label">Compressors</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${totalSupply.toFixed(0)}</div>
+                    <div class="stat-label">Total Supply</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${totalDemand.toFixed(0)}</div>
+                    <div class="stat-label">Total Demand</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${totalCapacity.toFixed(0)}</div>
+                    <div class="stat-label">Total Capacity</div>
+                </div>
+            `;
+
+            // Add optimization-specific statistics
+            if (optimizationResult) {
+                const totalFlow = optimizationResult.segmentFlows ? 
+                    Object.values(optimizationResult.segmentFlows).reduce((sum, flow) => sum + Math.abs(flow), 0) : 0;
+                const avgUtilization = totalCapacity > 0 ? (totalFlow / totalCapacity * 100).toFixed(1) : 0;
+
+                html += `
+                    <div class="stat-card">
+                        <div class="stat-value">${optimizationResult.status}</div>
+                        <div class="stat-label">Optimization Status</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${optimizationResult.objectiveValue ? optimizationResult.objectiveValue.toFixed(2) : 'N/A'}</div>
+                        <div class="stat-label">Objective Value</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${avgUtilization}%</div>
+                        <div class="stat-label">Avg Utilization</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${optimizationResult.solutionTimeMs ? optimizationResult.solutionTimeMs.toFixed(0) + 'ms' : 'N/A'}</div>
+                        <div class="stat-label">Solution Time</div>
+                    </div>
+                `;
+            }
+
+            statsPanel.innerHTML = html;
+        }
+
+        /**
+         * Export the current visualization as a PNG image
+         */
+        function exportVisualization() {
+            const svgElement = document.getElementById('networkSvg');
+            const svgData = new XMLSerializer().serializeToString(svgElement);
+            
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            
+            img.onload = function() {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                
+                const link = document.createElement('a');
+                link.download = 'pipeline-network.png';
+                link.href = canvas.toDataURL();
+                link.click();
+            };
+            
+            img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+        }
+
+        // Hide info panel when clicking elsewhere
+        document.addEventListener('click', function(event) {
+            const infoPanel = document.getElementById('infoPanel');
+            if (!infoPanel.contains(event.target) && !event.target.closest('.points') && !event.target.closest('.segments')) {
+                infoPanel.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

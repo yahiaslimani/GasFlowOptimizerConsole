@@ -1,0 +1,30 @@
+modules = ["csharp", "dotnet-8"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+packages = ["dotnet-sdk_8"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Gas Pipeline Optimization"
+
+[[workflows.workflow]]
+name = "Gas Pipeline Optimization"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "dotnet restore && dotnet run"
+
+[workflows.workflow.metadata]
+outputType = "console"
