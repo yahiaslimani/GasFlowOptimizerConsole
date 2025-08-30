@@ -190,7 +190,151 @@ namespace GasPipelineOptimization.Services
         }
 
         /// <summary>
-        /// Generates a detailed flow analysis report
+        /// Generates a comprehensive flow analysis report with detailed tabular data
+        /// </summary>
+        public string GenerateDetailedFlowReport(FlowCalculationResult result, PipelineNetwork network)
+        {
+            var report = new System.Text.StringBuilder();
+            
+            report.AppendLine("=== COMPREHENSIVE GAS PIPELINE FLOW ANALYSIS ===");
+            report.AppendLine($"Analysis Status: {result.CalculationStatus}");
+            report.AppendLine($"Network Feasible: {(result.IsNetworkFeasible ? "YES" : "NO")}");
+            report.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            report.AppendLine();
+
+            // Network overview
+            report.AppendLine("=== NETWORK OVERVIEW ===");
+            report.AppendLine($"Total Demand Required: {result.NetworkMetrics.TotalDemandRequired:F2} MMscfd");
+            report.AppendLine($"Total Supply Available: {result.NetworkMetrics.TotalSupplyAvailable:F2} MMscfd");
+            report.AppendLine($"Supply-Demand Balance: {result.NetworkMetrics.SupplyDemandBalance:F2} MMscfd");
+            report.AppendLine($"Supply Adequate: {(result.NetworkMetrics.IsSupplyAdequate ? "YES" : "NO")}");
+            report.AppendLine();
+
+            // KEY METRICS
+            report.AppendLine("=== KEY METRICS ===");
+            report.AppendLine($"Average Utilization: {result.NetworkMetrics.AverageUtilization:F1}%");
+            report.AppendLine($"Peak Utilization: {result.NetworkMetrics.PeakUtilization:F1}%");
+            report.AppendLine($"Minimum Utilization: {result.NetworkMetrics.MinimumUtilization:F1}%");
+            report.AppendLine($"Segments Over Capacity: {result.NetworkMetrics.SegmentsOverCapacity} of {result.NetworkMetrics.TotalSegments}");
+            report.AppendLine();
+
+            // CAPACITY VIOLATIONS
+            if (result.ValidationIssues.Any())
+            {
+                report.AppendLine("=== CAPACITY VIOLATIONS DETECTED ===");
+                foreach (var issue in result.ValidationIssues)
+                {
+                    report.AppendLine($"⚠ {issue}");
+                }
+                report.AppendLine();
+            }
+            else
+            {
+                report.AppendLine("✓ All segments are within capacity limits");
+                report.AppendLine();
+            }
+
+            // COMPREHENSIVE SEGMENT TABLE
+            report.AppendLine("=== COMPREHENSIVE SEGMENT ANALYSIS TABLE ===");
+            var headerLine = string.Format("{0,-10} {1,-25} {2,-15} {3,-15} {4,-12} {5,-12} {6,-10} {7,-12} {8,-8} {9,-15}",
+                "Segment", "Name", "From Point", "To Point", "Flow", "Capacity", "Usage %", "Status", "Length", "Diameter");
+            report.AppendLine(headerLine);
+            report.AppendLine(new string('=', headerLine.Length));
+
+            foreach (var analysis in result.SegmentAnalysis.Values.OrderByDescending(s => s.UtilizationPercentage))
+            {
+                var networkSegment = network.Segments[analysis.SegmentId];
+                var status = analysis.IsOverCapacity ? "OVER CAP" : "OK";
+                
+                var line = string.Format("{0,-10} {1,-25} {2,-15} {3,-15} {4,-12:F2} {5,-12:F2} {6,-10:F1} {7,-12} {8,-8:F1} {9,-15:F0}\"",
+                    analysis.SegmentId,
+                    analysis.SegmentName.Length > 25 ? analysis.SegmentName.Substring(0, 22) + "..." : analysis.SegmentName,
+                    analysis.FromPointId,
+                    analysis.ToPointId,
+                    analysis.RequiredFlow,
+                    analysis.Capacity,
+                    analysis.UtilizationPercentage,
+                    status,
+                    networkSegment.Length,
+                    networkSegment.Diameter);
+                
+                report.AppendLine(line);
+            }
+            report.AppendLine();
+
+            // TOP MOST UTILIZED SEGMENTS
+            var topSegments = result.SegmentAnalysis.Values
+                .OrderByDescending(s => s.UtilizationPercentage)
+                .Take(5)
+                .ToList();
+
+            if (topSegments.Any())
+            {
+                report.AppendLine("=== TOP 5 MOST UTILIZED SEGMENTS ===");
+                report.AppendLine(string.Format("{0,-10} {1,-12} {2,-12} {3,-12} {4,-10}",
+                    "Segment", "Flow", "Capacity", "Utilization", "Status"));
+                report.AppendLine(new string('-', 55));
+                
+                foreach (var segment in topSegments)
+                {
+                    var status = segment.IsOverCapacity ? "OVER CAP" : "OK";
+                    report.AppendLine(string.Format("{0,-10} {1,-12:F2} {2,-12:F2} {3,-12:F1}% {4,-10}",
+                        segment.SegmentId,
+                        segment.RequiredFlow,
+                        segment.Capacity,
+                        segment.UtilizationPercentage,
+                        status));
+                }
+                report.AppendLine();
+            }
+
+            // RECEIPT POINTS ANALYSIS
+            var receiptPoints = network.GetReceiptPoints().ToList();
+            if (receiptPoints.Any())
+            {
+                report.AppendLine("=== RECEIPT POINTS (SUPPLY SOURCES) ===");
+                report.AppendLine(string.Format("{0,-8} {1,-25} {2,-15} {3,-15} {4,-12}",
+                    "Point", "Name", "Supply Cap.", "Current Press.", "Unit Cost"));
+                report.AppendLine(new string('-', 80));
+                
+                foreach (var point in receiptPoints.OrderBy(p => p.Id))
+                {
+                    report.AppendLine(string.Format("{0,-8} {1,-25} {2,-15:F2} {3,-15:F1} {4,-12:F2}",
+                        point.Id,
+                        point.Name.Length > 25 ? point.Name.Substring(0, 22) + "..." : point.Name,
+                        point.SupplyCapacity,
+                        point.CurrentPressure,
+                        point.UnitCost));
+                }
+                report.AppendLine();
+            }
+
+            // DELIVERY POINTS ANALYSIS
+            var deliveryPoints = network.GetDeliveryPoints().ToList();
+            if (deliveryPoints.Any())
+            {
+                report.AppendLine("=== DELIVERY POINTS (DEMAND LOCATIONS) ===");
+                report.AppendLine(string.Format("{0,-8} {1,-25} {2,-15} {3,-15} {4,-12}",
+                    "Point", "Name", "Demand Req.", "Current Press.", "Min Press."));
+                report.AppendLine(new string('-', 80));
+                
+                foreach (var point in deliveryPoints.OrderBy(p => p.Id))
+                {
+                    report.AppendLine(string.Format("{0,-8} {1,-25} {2,-15:F2} {3,-15:F1} {4,-12:F1}",
+                        point.Id,
+                        point.Name.Length > 25 ? point.Name.Substring(0, 22) + "..." : point.Name,
+                        point.DemandRequirement,
+                        point.CurrentPressure,
+                        point.MinPressure));
+                }
+                report.AppendLine();
+            }
+
+            return report.ToString();
+        }
+
+        /// <summary>
+        /// Generates the original simplified flow report
         /// </summary>
         public string GenerateFlowReport(FlowCalculationResult result)
         {

@@ -87,13 +87,11 @@ namespace GasPipelineOptimization
             while (true)
             {
                 Console.WriteLine("\n=== Main Menu ===");
-                Console.WriteLine("1. Run Single Optimization");
-                Console.WriteLine("2. Compare Multiple Algorithms");
-                Console.WriteLine("3. Scenario Analysis");
+                Console.WriteLine("1. Flow Analysis & Validation");
+                Console.WriteLine("2. Pressure Analysis");
+                Console.WriteLine("3. Compressor Analysis");
                 Console.WriteLine("4. Network Information");
-                Console.WriteLine("5. Settings Configuration");
-                Console.WriteLine("6. Export Results");
-                Console.WriteLine("7. Flow Analysis & Validation");
+                Console.WriteLine("5. Export Analysis Results");
                 Console.WriteLine("0. Exit");
                 Console.Write("Select option: ");
 
@@ -102,25 +100,19 @@ namespace GasPipelineOptimization
                 switch (choice)
                 {
                     case "1":
-                        await RunSingleOptimization(engine, network);
+                        await RunFlowAnalysis(network);
                         break;
                     case "2":
-                        await CompareAlgorithms(engine, network);
+                        await RunPressureAnalysis(network);
                         break;
                     case "3":
-                        await RunScenarioAnalysis(engine, network);
+                        await RunCompressorAnalysis(network);
                         break;
                     case "4":
                         DisplayNetworkInformation(network);
                         break;
                     case "5":
-                        await ConfigureSettings();
-                        break;
-                    case "6":
-                        await ExportResults(engine, network);
-                        break;
-                    case "7":
-                        await RunFlowAnalysis(network);
+                        await ExportAnalysisResults(network);
                         break;
                     case "0":
                         Console.WriteLine("Goodbye!");
@@ -601,6 +593,31 @@ namespace GasPipelineOptimization
                     Console.WriteLine();
                 }
                 
+                // Show comprehensive segment table
+                Console.WriteLine("\n=== COMPREHENSIVE SEGMENT ANALYSIS TABLE ===");
+                var headerLine = string.Format("{0,-10} {1,-25} {2,-15} {3,-15} {4,-12} {5,-12} {6,-10} {7,-12}",
+                    "Segment", "Name", "From Point", "To Point", "Flow", "Capacity", "Usage %", "Status");
+                Console.WriteLine(headerLine);
+                Console.WriteLine(new string('=', headerLine.Length));
+
+                foreach (var analysis in result.SegmentAnalysis.Values.OrderByDescending(s => s.UtilizationPercentage))
+                {
+                    var status = analysis.IsOverCapacity ? "OVER CAP" : "OK";
+                    
+                    var line = string.Format("{0,-10} {1,-25} {2,-15} {3,-15} {4,-12:F2} {5,-12:F2} {6,-10:F1} {7,-12}",
+                        analysis.SegmentId,
+                        analysis.SegmentName.Length > 25 ? analysis.SegmentName.Substring(0, 22) + "..." : analysis.SegmentName,
+                        analysis.FromPointId,
+                        analysis.ToPointId,
+                        analysis.RequiredFlow,
+                        analysis.Capacity,
+                        analysis.UtilizationPercentage,
+                        status);
+                    
+                    Console.WriteLine(line);
+                }
+                Console.WriteLine();
+                
                 // Interactive options
                 Console.WriteLine("=== Analysis Options ===");
                 Console.WriteLine("1. View Detailed Report");
@@ -614,10 +631,10 @@ namespace GasPipelineOptimization
                 switch (choice)
                 {
                     case "1":
-                        Console.WriteLine("\n" + flowService.GenerateFlowReport(result));
+                        Console.WriteLine("\n" + flowService.GenerateDetailedFlowReport(result, network));
                         break;
                     case "2":
-                        await ExportFlowAnalysis(flowService, result);
+                        await ExportFlowAnalysis(flowService, result, network);
                         break;
                     case "3":
                         await AnalyzeSpecificSegment(network, result);
@@ -641,14 +658,249 @@ namespace GasPipelineOptimization
             }
         }
         
-        static async Task ExportFlowAnalysis(FlowCalculationService flowService, FlowCalculationResult result)
+        static async Task RunPressureAnalysis(PipelineNetwork network)
+        {
+            Console.WriteLine("\n=== Pressure Analysis ===");
+            Console.WriteLine("Analyzing pressure distribution and constraints across the network...");
+            
+            var flowService = new FlowCalculationService();
+            
+            try
+            {
+                // Calculate flows first
+                var result = flowService.CalculateUpstreamFlow(network);
+                
+                Console.WriteLine($"\nPressure Analysis Status: {result.CalculationStatus}");
+                Console.WriteLine();
+                
+                // Pressure constraints analysis
+                Console.WriteLine("=== PRESSURE CONSTRAINTS ANALYSIS ===");
+                Console.WriteLine(string.Format("{0,-8} {1,-25} {2,-12} {3,-12} {4,-12} {5,-10}",
+                    "Point", "Name", "Current", "Min", "Max", "Status"));
+                Console.WriteLine(new string('-', 75));
+                
+                foreach (var point in network.Points.Values.Where(p => p.IsActive).OrderBy(p => p.Id))
+                {
+                    var status = "OK";
+                    if (point.CurrentPressure < point.MinPressure)
+                        status = "LOW";
+                    else if (point.CurrentPressure > point.MaxPressure)
+                        status = "HIGH";
+                    
+                    Console.WriteLine(string.Format("{0,-8} {1,-25} {2,-12:F1} {3,-12:F1} {4,-12:F1} {5,-10}",
+                        point.Id,
+                        point.Name.Length > 25 ? point.Name.Substring(0, 22) + "..." : point.Name,
+                        point.CurrentPressure,
+                        point.MinPressure,
+                        point.MaxPressure,
+                        status));
+                }
+                Console.WriteLine();
+                
+                // Pressure drop analysis for segments with high utilization
+                var highUtilSegments = result.SegmentAnalysis.Values
+                    .Where(s => s.UtilizationPercentage > 80)
+                    .OrderByDescending(s => s.UtilizationPercentage)
+                    .ToList();
+                
+                if (highUtilSegments.Any())
+                {
+                    Console.WriteLine("=== HIGH UTILIZATION SEGMENTS (PRESSURE RISK) ===");
+                    Console.WriteLine(string.Format("{0,-10} {1,-12} {2,-12} {3,-15}",
+                        "Segment", "Utilization", "Length", "Pressure Risk"));
+                    Console.WriteLine(new string('-', 50));
+                    
+                    foreach (var segment in highUtilSegments)
+                    {
+                        var networkSegment = network.Segments[segment.SegmentId];
+                        var pressureRisk = segment.UtilizationPercentage > 95 ? "HIGH" : "MEDIUM";
+                        
+                        Console.WriteLine(string.Format("{0,-10} {1,-12:F1}% {2,-12:F1} {3,-15}",
+                            segment.SegmentId,
+                            segment.UtilizationPercentage,
+                            networkSegment.Length,
+                            pressureRisk));
+                    }
+                    Console.WriteLine();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during pressure analysis: {ex.Message}");
+            }
+            
+            Console.WriteLine("\nPress any key to continue...");
+            try
+            {
+                Console.ReadKey();
+            }
+            catch (InvalidOperationException)
+            {
+                Console.WriteLine("Pressure analysis completed.");
+            }
+        }
+        
+        static async Task RunCompressorAnalysis(PipelineNetwork network)
+        {
+            Console.WriteLine("\n=== Compressor Analysis ===");
+            Console.WriteLine("Analyzing compressor stations and their impact on network flow...");
+            
+            var flowService = new FlowCalculationService();
+            
+            try
+            {
+                // Calculate flows first
+                var result = flowService.CalculateUpstreamFlow(network);
+                
+                Console.WriteLine($"\nCompressor Analysis Status: {result.CalculationStatus}");
+                Console.WriteLine();
+                
+                // Compressor stations analysis
+                var compressors = network.GetCompressorStations().ToList();
+                
+                if (compressors.Any())
+                {
+                    Console.WriteLine("=== COMPRESSOR STATIONS ANALYSIS ===");
+                    Console.WriteLine(string.Format("{0,-8} {1,-25} {2,-12} {3,-12} {4,-12} {5,-10}",
+                        "Station", "Name", "Current P", "Max Boost", "Fuel Rate", "Status"));
+                    Console.WriteLine(new string('-', 85));
+                    
+                    foreach (var compressor in compressors.OrderBy(c => c.Id))
+                    {
+                        var status = compressor.IsActive ? "ACTIVE" : "OFFLINE";
+                        
+                        Console.WriteLine(string.Format("{0,-8} {1,-25} {2,-12:F1} {3,-12:F1} {4,-12:F4} {5,-10}",
+                            compressor.Id,
+                            compressor.Name.Length > 25 ? compressor.Name.Substring(0, 22) + "..." : compressor.Name,
+                            compressor.CurrentPressure,
+                            compressor.MaxPressureBoost,
+                            compressor.FuelConsumptionRate,
+                            status));
+                    }
+                    Console.WriteLine();
+                    
+                    // Flow through compressor stations
+                    Console.WriteLine("=== FLOW THROUGH COMPRESSOR STATIONS ===");
+                    Console.WriteLine(string.Format("{0,-8} {1,-15} {2,-15} {3,-12}",
+                        "Station", "Incoming Flow", "Outgoing Flow", "Net Balance"));
+                    Console.WriteLine(new string('-', 55));
+                    
+                    foreach (var compressor in compressors)
+                    {
+                        var incomingFlow = network.GetIncomingSegments(compressor.Id)
+                            .Where(s => result.SegmentAnalysis.ContainsKey(s.Id))
+                            .Sum(s => result.SegmentAnalysis[s.Id].RequiredFlow);
+                        
+                        var outgoingFlow = network.GetOutgoingSegments(compressor.Id)
+                            .Where(s => result.SegmentAnalysis.ContainsKey(s.Id))
+                            .Sum(s => result.SegmentAnalysis[s.Id].RequiredFlow);
+                        
+                        var netBalance = incomingFlow - outgoingFlow;
+                        
+                        Console.WriteLine(string.Format("{0,-8} {1,-15:F2} {2,-15:F2} {3,-12:F2}",
+                            compressor.Id,
+                            incomingFlow,
+                            outgoingFlow,
+                            netBalance));
+                    }
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.WriteLine("No compressor stations found in the network.");
+                    Console.WriteLine();
+                }
+                
+                // Segments requiring compression
+                var segmentsNeedingCompression = result.SegmentAnalysis.Values
+                    .Where(s => s.IsOverCapacity)
+                    .OrderByDescending(s => s.ExcessFlow)
+                    .ToList();
+                
+                if (segmentsNeedingCompression.Any())
+                {
+                    Console.WriteLine("=== SEGMENTS REQUIRING ADDITIONAL COMPRESSION ===");
+                    Console.WriteLine(string.Format("{0,-10} {1,-12} {2,-12} {3,-15}",
+                        "Segment", "Excess Flow", "Utilization", "Recommendation"));
+                    Console.WriteLine(new string('-', 50));
+                    
+                    foreach (var segment in segmentsNeedingCompression)
+                    {
+                        var recommendation = segment.ExcessFlow > 100 ? "URGENT" : "MONITOR";
+                        
+                        Console.WriteLine(string.Format("{0,-10} {1,-12:F2} {2,-12:F1}% {3,-15}",
+                            segment.SegmentId,
+                            segment.ExcessFlow,
+                            segment.UtilizationPercentage,
+                            recommendation));
+                    }
+                    Console.WriteLine();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during compressor analysis: {ex.Message}");
+            }
+            
+            Console.WriteLine("\nPress any key to continue...");
+            try
+            {
+                Console.ReadKey();
+            }
+            catch (InvalidOperationException)
+            {
+                Console.WriteLine("Compressor analysis completed.");
+            }
+        }
+        
+        static async Task ExportAnalysisResults(PipelineNetwork network)
+        {
+            Console.WriteLine("\n=== Export Analysis Results ===");
+            Console.WriteLine("Generating comprehensive analysis reports...");
+            
+            var flowService = new FlowCalculationService();
+            
+            try
+            {
+                var result = flowService.CalculateUpstreamFlow(network);
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                
+                // Export detailed flow analysis
+                var detailedReport = flowService.GenerateDetailedFlowReport(result, network);
+                var filename = $"comprehensive_analysis_{timestamp}.txt";
+                await File.WriteAllTextAsync(filename, detailedReport);
+                Console.WriteLine($"Comprehensive analysis exported to: {filename}");
+                
+                // Export summary report
+                var summaryReport = flowService.GenerateFlowReport(result);
+                var summaryFilename = $"flow_summary_{timestamp}.txt";
+                await File.WriteAllTextAsync(summaryFilename, summaryReport);
+                Console.WriteLine($"Flow summary exported to: {summaryFilename}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Export failed: {ex.Message}");
+            }
+            
+            Console.WriteLine("\nPress any key to continue...");
+            try
+            {
+                Console.ReadKey();
+            }
+            catch (InvalidOperationException)
+            {
+                Console.WriteLine("Export completed.");
+            }
+        }
+        
+        static async Task ExportFlowAnalysis(FlowCalculationService flowService, FlowCalculationResult result, PipelineNetwork network)
         {
             try
             {
                 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 var filename = $"flow_analysis_{timestamp}.txt";
                 
-                var report = flowService.GenerateFlowReport(result);
+                var report = flowService.GenerateDetailedFlowReport(result, network);
                 await File.WriteAllTextAsync(filename, report);
                 
                 Console.WriteLine($"Flow analysis exported to: {filename}");
