@@ -1,4 +1,4 @@
-modules = ["dotnet-7.0", "web"]
+modules = ["dotnet-7.0", "web", "dotnet-8"]
 run = "dotnet run"
 [agent]
 expertMode = true
