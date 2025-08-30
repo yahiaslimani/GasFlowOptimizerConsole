@@ -122,22 +122,22 @@ namespace GasPipelineOptimization.Models
         }
 
         /// <summary>
-        /// Gets trunk lines (main transmission lines) - segments with highest capacity or connecting receipt to delivery points
+        /// Gets trunk segments (main transmission segments) - segments with highest capacity or connecting receipt to delivery points
         /// </summary>
-        public IEnumerable<Segment> GetTrunkLines()
+        public IEnumerable<Segment> GetTrunkSegments()
         {
             var segments = GetActiveSegments().ToList();
             if (!segments.Any()) return new List<Segment>();
 
-            // Identify trunk lines as segments that:
+            // Identify trunk segments as segments that:
             // 1. Have high capacity (top 30% of capacities)
             // 2. Connect receipt points to the network
-            // 3. Are main transmission lines (not small distribution lines)
+            // 3. Are main transmission segments (not small distribution segments)
             
             var sortedByCapacity = segments.OrderByDescending(s => s.Capacity).ToList();
             var capacityThreshold = sortedByCapacity.Take(Math.Max(1, sortedByCapacity.Count / 3)).Min(s => s.Capacity);
             
-            var trunkLines = segments.Where(s => 
+            var trunkSegments = segments.Where(s => 
                 s.Capacity >= capacityThreshold || // High capacity segments
                 GetReceiptPoints().Any(r => r.Id == s.FromPointId) || // Segments from receipt points
                 s.Name.ToLower().Contains("main") || // Segments with "main" in name
@@ -145,30 +145,30 @@ namespace GasPipelineOptimization.Models
                 s.Name.ToLower().Contains("transmission") // Segments with "transmission" in name
             ).ToList();
 
-            return trunkLines.Any() ? trunkLines : segments.Take(1); // Return at least one segment
+            return trunkSegments.Any() ? trunkSegments : segments.Take(1); // Return at least one segment
         }
 
         /// <summary>
-        /// Gets connected lines for a trunk line (segments that form a path with the trunk line)
+        /// Gets connected segments for a trunk segment (segments that form a path with the trunk segment)
         /// </summary>
-        public IEnumerable<Segment> GetConnectedLines(Segment trunkLine)
+        public IEnumerable<Segment> GetConnectedSegments(Segment trunkSegment)
         {
-            var connectedLines = new List<Segment> { trunkLine };
-            var visited = new HashSet<string> { trunkLine.Id };
+            var connectedSegments = new List<Segment> { trunkSegment };
+            var visited = new HashSet<string> { trunkSegment.Id };
 
             // Find downstream connected segments
-            FindConnectedSegments(trunkLine.ToPointId, connectedLines, visited, true);
+            FindConnectedSegments(trunkSegment.ToPointId, connectedSegments, visited, true);
             
             // Find upstream connected segments  
-            FindConnectedSegments(trunkLine.FromPointId, connectedLines, visited, false);
+            FindConnectedSegments(trunkSegment.FromPointId, connectedSegments, visited, false);
 
-            return connectedLines;
+            return connectedSegments;
         }
 
         /// <summary>
         /// Recursively finds connected segments in a direction (downstream or upstream)
         /// </summary>
-        private void FindConnectedSegments(string pointId, List<Segment> connectedLines, 
+        private void FindConnectedSegments(string pointId, List<Segment> connectedSegments, 
                                          HashSet<string> visited, bool downstream)
         {
             var segments = downstream ? 
@@ -180,11 +180,11 @@ namespace GasPipelineOptimization.Models
                 if (visited.Contains(segment.Id)) continue;
                 
                 visited.Add(segment.Id);
-                connectedLines.Add(segment);
+                connectedSegments.Add(segment);
 
                 // Continue tracing in the same direction
                 var nextPointId = downstream ? segment.ToPointId : segment.FromPointId;
-                FindConnectedSegments(nextPointId, connectedLines, visited, downstream);
+                FindConnectedSegments(nextPointId, connectedSegments, visited, downstream);
             }
         }
 

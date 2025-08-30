@@ -24,13 +24,13 @@ namespace GasPipelineOptimization.Services
                     segmentFlows[segment.Id] = 0.0;
                 }
 
-                // Step 2: Process flows using trunk line approach (similar to existing project)
-                var trunkLines = network.GetTrunkLines().OrderBy(t => t.FromPointId).ToList();
+                // Step 2: Process flows using trunk segment approach (similar to existing project)
+                var trunkSegments = network.GetTrunkSegments().OrderBy(t => t.FromPointId).ToList();
                 
-                foreach (var trunkLine in trunkLines)
+                foreach (var trunkSegment in trunkSegments)
                 {
-                    var connectedLines = network.GetConnectedLines(trunkLine).ToList();
-                    AddLineFlows(network, trunkLine, connectedLines, segmentFlows);
+                    var connectedSegments = network.GetConnectedSegments(trunkSegment).ToList();
+                    AddSegmentFlows(network, trunkSegment, connectedSegments, segmentFlows);
                 }
 
                 // Step 3: Calculate usage percentages and validate capacity constraints
@@ -81,31 +81,31 @@ namespace GasPipelineOptimization.Services
         }
 
         /// <summary>
-        /// Adds flow calculations for a trunk line and its connected segments (similar to existing project's AddLineFlows)
+        /// Adds flow calculations for a trunk segment and its connected segments (similar to existing project's AddSegmentFlows)
         /// </summary>
-        private void AddLineFlows(PipelineNetwork network, Segment trunkLine, List<Segment> connectedLines, 
+        private void AddSegmentFlows(PipelineNetwork network, Segment trunkSegment, List<Segment> connectedSegments, 
                                 Dictionary<string, double> segmentFlows)
         {
-            // Process each connected line in the trunk line system
+            // Process each connected segment in the trunk segment system
             var processedSegments = new HashSet<string>();
             
-            // Step 1: Calculate flow requirements for this trunk line system
-            var totalDemandDownstream = CalculateDownstreamDemand(network, trunkLine, processedSegments);
+            // Step 1: Calculate flow requirements for this trunk segment system
+            var totalDemandDownstream = CalculateDownstreamDemand(network, trunkSegment, processedSegments);
             
-            // Step 2: Distribute flows through the trunk line and connected segments
-            DistributeFlowsThroughTrunkSystem(network, trunkLine, connectedLines, totalDemandDownstream, segmentFlows);
+            // Step 2: Distribute flows through the trunk segment and connected segments
+            DistributeFlowsThroughTrunkSystem(network, trunkSegment, connectedSegments, totalDemandDownstream, segmentFlows);
         }
 
         /// <summary>
-        /// Calculates total demand downstream from a trunk line
+        /// Calculates total demand downstream from a trunk segment
         /// </summary>
-        private double CalculateDownstreamDemand(PipelineNetwork network, Segment trunkLine, HashSet<string> processedSegments)
+        private double CalculateDownstreamDemand(PipelineNetwork network, Segment trunkSegment, HashSet<string> processedSegments)
         {
             var totalDemand = 0.0;
             var visited = new HashSet<string>();
             
-            // Trace downstream from trunk line to find all delivery points
-            TraceDownstreamDemand(network, trunkLine.ToPointId, ref totalDemand, visited);
+            // Trace downstream from trunk segment to find all delivery points
+            TraceDownstreamDemand(network, trunkSegment.ToPointId, ref totalDemand, visited);
             
             return totalDemand;
         }
@@ -134,17 +134,17 @@ namespace GasPipelineOptimization.Services
         }
 
         /// <summary>
-        /// Distributes flows through the trunk line system based on demands and network topology
+        /// Distributes flows through the trunk segment system based on demands and network topology
         /// </summary>
-        private void DistributeFlowsThroughTrunkSystem(PipelineNetwork network, Segment trunkLine, 
-                                                      List<Segment> connectedLines, double totalDemand, 
+        private void DistributeFlowsThroughTrunkSystem(PipelineNetwork network, Segment trunkSegment, 
+                                                      List<Segment> connectedSegments, double totalDemand, 
                                                       Dictionary<string, double> segmentFlows)
         {
-            // Process trunk line first
-            segmentFlows[trunkLine.Id] += totalDemand;
+            // Process trunk segment first
+            segmentFlows[trunkSegment.Id] += totalDemand;
             
             // Process each connected segment
-            foreach (var segment in connectedLines.Where(s => s.Id != trunkLine.Id))
+            foreach (var segment in connectedSegments.Where(s => s.Id != trunkSegment.Id))
             {
                 // Calculate the demand served by this segment
                 var segmentDemand = CalculateSegmentDemand(network, segment);
